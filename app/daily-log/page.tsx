@@ -16,7 +16,95 @@ import {
   checkSleepRules,
   calculate7DayAverage,
 } from '@/lib/utils';
-import { ChevronLeft, ChevronRight, LogOut, Save, Share2, Printer, Download, Upload } from 'lucide-react';
+import { ChevronLeft, ChevronRight, LogOut, Save, Share2, Printer, Download, Upload, AlertCircle } from 'lucide-react';
+
+// Program start date: June 1, 2026 (Monday) = Day 1
+// Total days in 18 months = 548 days (June 1, 2026 - Dec 31, 2027)
+const PROGRAM_START_DATE = new Date('2026-06-01');
+const TOTAL_PROGRAM_DAYS = 548;
+
+// Override day calculation with new start date
+function getDayNumber(date: Date): number {
+  const dateOnly = new Date(date);
+  dateOnly.setHours(0, 0, 0, 0);
+  
+  const startOnly = new Date(PROGRAM_START_DATE);
+  startOnly.setHours(0, 0, 0, 0);
+  
+  const diffTime = dateOnly.getTime() - startOnly.getTime();
+  const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+  
+  return diffDays + 1; // Day 1 starts on June 1, 2026
+}
+
+// ============ PHASE 1: NEW VALIDATION FUNCTIONS ============
+
+/**
+ * Validate meal bowls based on gender-specific limits and bowl type restrictions
+ * Men: <10 bowls max
+ * Women: <8 bowls max
+ * Carbs (C): <1 (max 0 carbs)
+ * Rice (R): <2 (max 1 rice)
+ * Returns: { isValid: boolean, warnings: string[] }
+ */
+function validateMealBowls(
+  bowls: string[],
+  userGender: 'male' | 'female' = 'male' // Default to male (10 max)
+): { isValid: boolean; warnings: string[] } {
+  const warnings: string[] = [];
+  const filledBowls = bowls.filter(b => b && b !== '');
+  
+  // Count by type
+  const carbCount = filledBowls.filter(b => b === 'C').length;
+  const riceCount = filledBowls.filter(b => b === 'R').length;
+  const totalCount = filledBowls.length;
+  
+  // Check gender-specific bowl limits
+  const maxBowls = userGender === 'male' ? 10 : 8;
+  if (totalCount >= maxBowls) {
+    warnings.push(`⚠️ ${userGender === 'male' ? 'Men' : 'Women'}: Max ${maxBowls} bowls (currently: ${totalCount})`);
+  }
+  
+  // Check carb limit (C > 0)
+  if (carbCount > 1) {
+    warnings.push(`⚠️ Carbs: Max 1 (currently: ${carbCount})`);
+  }
+  
+  // Check rice limit (R > 1)
+  if (riceCount > 1) {
+    warnings.push(`⚠️ Rice: Max 1 bowl (currently: ${riceCount})`);
+  }
+  
+  // Valid only if NO violations
+  const isValid = warnings.length === 0;
+  
+  return { isValid, warnings };
+}
+
+/**
+ * Calculate supplement check status
+ * Tick if >= 75% of planned supplements are taken
+ * Returns: { shouldTick: boolean, percentage: number }
+ */
+function validateSupplements(
+  supplementsTaken: string[], 
+  supplementsPlanned?: string[]
+): {
+  shouldTick: boolean;
+  percentage: number;
+} {
+  const planned = supplementsPlanned || SUPPLEMENT_TYPES;
+  
+  if (planned.length === 0) {
+    return { shouldTick: false, percentage: 0 };
+  }
+  
+  const takenCount = supplementsTaken.length;
+  const percentage = Math.round((takenCount / planned.length) * 100);
+  const shouldTick = percentage >= 75;
+  
+  return { shouldTick, percentage };
+}
 
 export default function HomePage() {
   const [user, setUser] = useState<any>(null);
@@ -27,6 +115,16 @@ export default function HomePage() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [showSummary, setShowSummary] = useState(false);
+  
+  // PHASE 1: New state for meal validation warnings
+  const [mealValidation, setMealValidation] = useState<{ isValid: boolean; warnings: string[] }>({ 
+    isValid: true, 
+    warnings: [] 
+  });
+  const [supplementValidation, setSupplementValidation] = useState<{ shouldTick: boolean; percentage: number }>({
+    shouldTick: false,
+    percentage: 0
+  });
 
   const router = useRouter();
   const supabase = createClient();
@@ -41,19 +139,35 @@ export default function HomePage() {
     }
   }, [currentDate, user]);
 
+  // PHASE 1: Enhanced useEffect - Now includes meal and supplement validation
   useEffect(() => {
+    // Get user gender (default to male for 10-bowl limit)
+    const userGender = (user?.user_metadata?.gender as 'male' | 'female') || 'male';
+    
+    // Validate meals
+    const mealValidationResult = validateMealBowls(currentLog.meal_bowls, userGender);
+    setMealValidation(mealValidationResult);
+    
+    // Validate supplements
+    const supplementValidationResult = validateSupplements(currentLog.supplements_taken || []);
+    setSupplementValidation(supplementValidationResult);
+    
+    // Update checks - only meals_check ticks if meal validation passes AND other rules met
     setCurrentLog(prev => ({
       ...prev,
-      meals_check: checkMealRules(prev.meal_bowls),
+      meals_check: mealValidationResult.isValid && checkMealRules(prev.meal_bowls),
+      supplements_check: supplementValidationResult.shouldTick, // NEW: supplements_check now based on 75% rule
       movement_check: checkMovementRules(prev.movement_items),
       hydration_check: checkHydrationRules(prev.hydration_items),
       sleep_check: checkSleepRules(prev.sleep_items),
     }));
   }, [
     currentLog.meal_bowls,
+    currentLog.supplements_taken,
     currentLog.movement_items,
     currentLog.hydration_items,
     currentLog.sleep_items,
+    user,
   ]);
 
   async function checkUser() {
@@ -104,9 +218,16 @@ export default function HomePage() {
     setSaving(true);
 
     try {
+      const userGender = (user?.user_metadata?.gender as 'male' | 'female') || 'male';
+      const mealValidationResult = validateMealBowls(currentLog.meal_bowls, userGender);
+      const supplementValidationResult = validateSupplements(currentLog.supplements_taken || []);
+      
       const updatedLog = {
         ...currentLog,
-        meals_check: checkMealRules(currentLog.meal_bowls),
+        // PHASE 1: Only tick meals_check if validation passes AND other rules met
+        meals_check: mealValidationResult.isValid && checkMealRules(currentLog.meal_bowls),
+        // PHASE 1: New supplement check based on 75% rule
+        supplements_check: supplementValidationResult.shouldTick,
         movement_check: checkMovementRules(currentLog.movement_items),
         hydration_check: checkHydrationRules(currentLog.hydration_items),
         sleep_check: checkSleepRules(currentLog.sleep_items),
@@ -147,7 +268,7 @@ export default function HomePage() {
     const divider = '─────────────────────';
 
     // Calculate day number and fasting window
-    const dayNum = calculateDayNumber(currentDate);
+    const dayNum = getDayNumber(currentDate);
     const yesterdayLog = allLogs.find(
       l => l.log_date === formatDateForDB(new Date(currentDate.getTime() - 86400000))
     );
@@ -255,9 +376,9 @@ export default function HomePage() {
 
     // ── SUPPLEMENTS ──
     const sups = currentLog.supplements_taken || [];
-    lines.push(`💊 *Supplements* ${sups.length > 0 ? '✅' : '❌'}`);
+    lines.push(`💊 *Supplements* ${currentLog.supplements_check ? '✅' : '❌'}`);
     if (sups.length > 0) {
-      lines.push(`   ${sups.join(' | ')}`);
+      lines.push(`   ${sups.join(' | ')} (${supplementValidation.percentage}%)`);
     } else {
       lines.push(`   None taken`);
     }
@@ -287,7 +408,7 @@ export default function HomePage() {
     const checks = [
       currentLog.meals_check,
       currentLog.movement_check,
-      sups.length > 0,
+      currentLog.supplements_check,
       currentLog.hydration_check,
       currentLog.sleep_check,
     ].filter(Boolean).length;
@@ -382,52 +503,67 @@ export default function HomePage() {
           });
         }
 
+        showMessage(`Imported ${importData.logs.length} logs! ✓`, 'success');
         await loadAllLogs(user.id);
-        showMessage('Data imported successfully! ✓', 'success');
       } catch (error: any) {
-        showMessage('Import failed: ' + error.message, 'error');
+        showMessage('Error importing: ' + error.message, 'error');
       }
     };
     input.click();
   }
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500">
-        <div className="text-white text-xl font-semibold">Loading...</div>
-      </div>
-    );
+    return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
   }
 
-  const dayNumber = calculateDayNumber(currentDate);
-  const yesterdayLog = allLogs.find(l => l.log_date === formatDateForDB(new Date(currentDate.getTime() - 86400000)));
-  const fastingWindow = calculateFastingWindow(yesterdayLog?.meal_times.lastMealEnd, currentLog.meal_times.meal1);
+  const dayNumber = getDayNumber(currentDate);
+  const progressPercentage = (dayNumber / TOTAL_PROGRAM_DAYS) * 100;
+  const fastingWindow = calculateFastingWindow(
+    allLogs.find(l => l.log_date === formatDateForDB(new Date(currentDate.getTime() - 86400000)))?.meal_times?.lastMealEnd,
+    currentLog.meal_times?.meal1
+  );
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 text-white shadow-lg">
-        <div className="max-w-2xl mx-auto p-6 md:p-8">
-          {/* Top Row: Title and Sign Out */}
-          <div className="flex justify-between items-start mb-6">
-            <div>
-              <div className="text-xs font-semibold tracking-widest uppercase opacity-80 mb-1">
-                MY HEALTH COMPANION
-              </div>
-              <h1 className="text-3xl md:text-4xl font-bold">
-                Mimic GLP-1 Journal
-              </h1>
+    <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500">
+      {/* Summary Modal */}
+      {showSummary && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-96 overflow-auto">
+            <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-bold">📋 Daily Summary</h3>
+              <button
+                onClick={() => setShowSummary(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+              >
+                ×
+              </button>
             </div>
-            <button
-              onClick={signOut}
-              className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition text-sm font-semibold backdrop-blur-sm"
-            >
-              <LogOut size={18} />
-              Sign Out
-            </button>
+            <div className="p-6 whitespace-pre-wrap font-mono text-sm max-w-2xl overflow-auto max-h-80">
+              {generateSummaryText()}
+            </div>
+            <div className="p-4 border-t border-gray-200 flex gap-2">
+              <button
+                onClick={handleWhatsAppShare}
+                className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg font-semibold hover:bg-indigo-700 transition flex items-center justify-center gap-2"
+              >
+                <Share2 size={16} />
+                Copy Again
+              </button>
+              <button
+                onClick={() => setShowSummary(false)}
+                className="flex-1 px-4 py-2 bg-gray-300 text-gray-900 rounded-lg font-semibold hover:bg-gray-400 transition"
+              >
+                Close
+              </button>
+            </div>
           </div>
+        </div>
+      )}
 
-          {/* Action Buttons Row */}
-          <div className="flex flex-wrap gap-2 mb-6">
+      {/* Top Navigation Bar */}
+      <div className="bg-black/30 text-white">
+        <div className="max-w-2xl mx-auto p-4 md:p-6 flex items-center justify-between">
+          <div className="flex gap-2 flex-wrap">
             <button
               onClick={() => router.push('/dashboard')}
               className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition text-sm font-semibold backdrop-blur-sm"
@@ -465,18 +601,27 @@ export default function HomePage() {
             </button>
           </div>
 
-          {/* Day Info */}
+          {/* PHASE 1: PROGRESS BAR - Replace day number display */}
           <div className="bg-white/10 backdrop-blur-sm rounded-xl px-6 py-4 inline-block">
-            <div className="text-sm opacity-80 mb-1">
-              {currentDate.toLocaleDateString('en-US', { weekday: 'long' })}
+            <div className="text-sm opacity-80 mb-2">Program Progress</div>
+            {/* Visual Progress Bar */}
+            <div className="w-48 h-2 bg-white/20 rounded-full overflow-hidden mb-2">
+              <div
+                className="h-full bg-gradient-to-r from-yellow-300 to-orange-500 transition-all duration-300"
+                style={{ width: `${progressPercentage}%` }}
+              />
             </div>
-            <div className="text-4xl md:text-5xl font-bold mb-1">Day {dayNumber}</div>
-            <div className="text-lg opacity-90">{formatDate(currentDate)}</div>
+            {/* Percentage and Days */}
+            <div className="text-lg font-bold">
+              {Math.round(progressPercentage)}% — Day {dayNumber}/{TOTAL_PROGRAM_DAYS}
+            </div>
+            <div className="text-sm opacity-90">{formatDate(currentDate)}</div>
           </div>
         </div>
       </div>
 
       <div className="max-w-2xl mx-auto p-4 md:p-6">
+        {/* Date Navigation */}
         <div className="bg-white rounded-xl shadow-md p-4 mb-6 flex items-center gap-3">
           <button
             onClick={() => changeDate(-1)}
@@ -500,6 +645,14 @@ export default function HomePage() {
           </button>
         </div>
 
+        {/* Message Display */}
+        {message && (
+          <div className={`mb-6 p-4 rounded-lg font-semibold ${message.includes('Error') ? 'bg-red-100 text-red-900' : 'bg-green-100 text-green-900'}`}>
+            {message}
+          </div>
+        )}
+
+        {/* Weight Tracking */}
         <div className="bg-white rounded-xl shadow-md p-4 md:p-6 mb-6">
           <h2 className="text-lg font-bold text-gray-900 mb-4">⚖️ Weight Tracking</h2>
           <div className="flex gap-3 items-center mb-3">
@@ -523,17 +676,32 @@ export default function HomePage() {
           )}
         </div>
 
-        {/* MEAL BOWLS with DROPDOWNS */}
+        {/* MEAL BOWLS - PHASE 1 ENHANCED */}
         <div className="bg-white rounded-xl shadow-md p-4 md:p-6 mb-6">
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900">🍽️ Meal Bowls</h2>
-              <p className="text-xs text-gray-500 mt-1">Target: 6 bowls (P+V+G ≥4, R≤2)</p>
+              <p className="text-xs text-gray-500 mt-1">
+                Target: Men &lt;10, Women &lt;8 | Carbs &lt;1, Rice &lt;2 | P+V+G ≥4, R≤2
+              </p>
             </div>
             <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${currentLog.meals_check ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
               {currentLog.meals_check && <span className="text-white font-bold text-sm">✓</span>}
             </div>
           </div>
+
+          {/* PHASE 1: Display meal validation warnings */}
+          {mealValidation.warnings.length > 0 && (
+            <div className="mb-4 bg-red-50 border-2 border-red-200 rounded-lg p-3 space-y-2">
+              {mealValidation.warnings.map((warning, idx) => (
+                <div key={idx} className="flex items-start gap-2 text-sm text-red-700">
+                  <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+                  <span>{warning}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="space-y-3">
             {/* Row 1 */}
             <div className="grid grid-cols-5 gap-2">
@@ -744,9 +912,34 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* SUPPLEMENTS - 10 CHECKBOXES */}
+        {/* SUPPLEMENTS - PHASE 1 ENHANCED with 75% rule */}
         <div className="bg-white rounded-xl shadow-md p-4 md:p-6 mb-6">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">💊 Supplements</h2>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">💊 Supplements</h2>
+              <p className="text-xs text-gray-500 mt-1">Need ≥75% ({Math.ceil(SUPPLEMENT_TYPES.length * 0.75)}/{SUPPLEMENT_TYPES.length}) to tick</p>
+            </div>
+            <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${currentLog.supplements_check ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
+              {currentLog.supplements_check && <span className="text-white font-bold text-sm">✓</span>}
+            </div>
+          </div>
+
+          {/* PHASE 1: Show supplement percentage */}
+          {(currentLog.supplements_taken || []).length > 0 && (
+            <div className="mb-4 bg-blue-50 border-2 border-blue-200 rounded-lg p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold text-gray-700">Completion:</span>
+                <span className="text-lg font-bold text-blue-600">{supplementValidation.percentage}% ({(currentLog.supplements_taken || []).length}/{SUPPLEMENT_TYPES.length})</span>
+              </div>
+              {supplementValidation.shouldTick && (
+                <p className="text-xs text-green-600 mt-1">✓ 75% threshold reached!</p>
+              )}
+              {!supplementValidation.shouldTick && (currentLog.supplements_taken || []).length > 0 && (
+                <p className="text-xs text-orange-600 mt-1">Need {Math.ceil(SUPPLEMENT_TYPES.length * 0.75) - (currentLog.supplements_taken || []).length} more to reach 75%</p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             {SUPPLEMENT_TYPES.map((supplement) => (
               <label key={supplement} className="flex items-center gap-2 cursor-pointer">
@@ -785,27 +978,22 @@ export default function HomePage() {
                 key={i}
                 onClick={() => {
                   const items = [...currentLog.hydration_items];
-                  const newValue = !items[i];
-                  for (let j = 0; j <= i; j++) {
-                    items[j] = newValue;
-                  }
-                  if (!newValue) {
-                    for (let j = i + 1; j < items.length; j++) {
-                      items[j] = false;
-                    }
-                  }
+                  items[i] = !items[i];
                   setCurrentLog({ ...currentLog, hydration_items: items });
                 }}
-                className={`w-9 h-9 rounded-full border-2 font-bold text-xs transition ${
-                  i >= 4 ? 'border-dashed' : ''
-                } ${
+                className={`w-10 h-10 rounded-full border-2 font-bold text-sm transition flex items-center justify-center ${
                   filled
                     ? 'bg-cyan-500 border-cyan-500 text-white shadow-lg shadow-cyan-500/50'
-                    : 'border-gray-300 text-gray-400'
+                    : 'border-gray-300 text-gray-400 bg-white'
                 }`}
-              />
+              >
+                L
+              </button>
             ))}
           </div>
+          <p className="text-sm text-gray-600 mt-3">
+            {currentLog.hydration_items.filter(Boolean).length}L consumed
+          </p>
         </div>
 
         {/* SLEEP */}
@@ -813,7 +1001,7 @@ export default function HomePage() {
           <div className="flex items-center justify-between mb-4">
             <div>
               <h2 className="text-lg font-bold text-gray-900">😴 Sleep</h2>
-              <p className="text-xs text-gray-500 mt-1">Target: 6h+ (goal: 8h+, max 10h)</p>
+              <p className="text-xs text-gray-500 mt-1">Target: 8 hours</p>
             </div>
             <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${currentLog.sleep_check ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
               {currentLog.sleep_check && <span className="text-white font-bold text-sm">✓</span>}
@@ -825,289 +1013,48 @@ export default function HomePage() {
                 key={i}
                 onClick={() => {
                   const items = [...currentLog.sleep_items];
-                  const newValue = !items[i];
-                  for (let j = 0; j <= i; j++) {
-                    items[j] = newValue;
-                  }
-                  if (!newValue) {
-                    for (let j = i + 1; j < items.length; j++) {
-                      items[j] = false;
-                    }
-                  }
+                  items[i] = !items[i];
                   setCurrentLog({ ...currentLog, sleep_items: items });
                 }}
-                className={`w-9 h-9 rounded-full border-2 font-bold text-xs transition ${
-                  i >= 8 ? 'border-dashed' : ''
-                } ${
+                className={`w-10 h-10 rounded-full border-2 font-bold text-sm transition flex items-center justify-center ${
                   filled
                     ? 'bg-purple-500 border-purple-500 text-white shadow-lg shadow-purple-500/50'
-                    : 'border-gray-300 text-gray-400'
+                    : 'border-gray-300 text-gray-400 bg-white'
                 }`}
-              />
+              >
+                H
+              </button>
             ))}
           </div>
+          <p className="text-sm text-gray-600 mt-3">
+            {currentLog.sleep_items.filter(Boolean).length} hours slept
+          </p>
         </div>
 
         {/* NOTES */}
         <div className="bg-white rounded-xl shadow-md p-4 md:p-6 mb-6">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">📌 Notes</h2>
+          <h2 className="text-lg font-bold text-gray-900 mb-4">📝 Notes</h2>
           <textarea
             value={currentLog.notes || ''}
             onChange={(e) => setCurrentLog({ ...currentLog, notes: e.target.value })}
-            placeholder="Add your notes here..."
+            placeholder="Any additional notes for the day..."
             className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-indigo-500 focus:outline-none resize-none text-sm"
-            rows={4}
+            rows={3}
           />
         </div>
 
-        {/* SAVE BUTTON */}
-        <button
-          onClick={saveLog}
-          disabled={saving}
-          className="w-full bg-gradient-to-r from-green-600 to-emerald-600 text-white font-bold py-4 px-6 rounded-xl hover:from-green-700 hover:to-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg flex items-center justify-center gap-2"
-        >
-          <Save size={20} />
-          {saving ? 'Saving...' : 'Save Entry'}
-        </button>
+        {/* Save Button */}
+        <div className="flex gap-3 mb-6">
+          <button
+            onClick={saveLog}
+            disabled={saving}
+            className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            <Save size={20} />
+            {saving ? 'Saving...' : 'Save Log'}
+          </button>
+        </div>
       </div>
-
-      {/* MESSAGE TOAST */}
-      {message && (
-        <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl shadow-xl font-semibold ${
-          message.includes('Error') ? 'bg-red-500' : 'bg-green-500'
-        } text-white z-50`}>
-          {message}
-        </div>
-      )}
-
-      {/* WHATSAPP SUMMARY MODAL */}
-      {showSummary && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowSummary(false)}>
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-
-            {/* Header */}
-            <div className="text-center mb-4 pb-4 border-b border-gray-100">
-              <div className="text-xs font-bold tracking-widest text-gray-400 uppercase mb-1">Mimic GLP-1 Journal</div>
-              <h1 className="text-3xl font-bold text-indigo-600">Day {dayNumber}</h1>
-              <p className="text-gray-600 text-sm mt-1">{formatDate(currentDate)}</p>
-              <p className="text-xs text-gray-400">{new Date(currentDate).toLocaleDateString('en-US', { weekday: 'long' })}</p>
-              {/* Daily Score */}
-              <div className="mt-3 flex justify-center gap-2">
-                {[
-                  { check: currentLog.meals_check, label: '🍽️' },
-                  { check: currentLog.movement_check, label: '🏃' },
-                  { check: (currentLog.supplements_taken || []).length > 0, label: '💊' },
-                  { check: currentLog.hydration_check, label: '💧' },
-                  { check: currentLog.sleep_check, label: '😴' },
-                ].map((item, i) => (
-                  <div key={i} className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ${item.check ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'}`}>
-                    {item.label}
-                  </div>
-                ))}
-              </div>
-              <p className="text-xs text-gray-500 mt-2">
-                {[currentLog.meals_check, currentLog.movement_check, (currentLog.supplements_taken||[]).length > 0, currentLog.hydration_check, currentLog.sleep_check].filter(Boolean).length}/5 completed
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              {/* Weight */}
-              {currentLog.weight && (
-                <div className="bg-indigo-50 rounded-xl p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-gray-700">⚖️ Weight</span>
-                    <span className="text-xl font-bold text-indigo-600">{currentLog.weight} kg</span>
-                  </div>
-                  {currentLog.weight_avg && (
-                    <p className="text-xs text-gray-500 mt-1 text-right">7-day avg: {currentLog.weight_avg} kg</p>
-                  )}
-                </div>
-              )}
-
-              {/* Fasting */}
-              <div className="bg-green-50 rounded-xl p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-bold text-gray-700">⏱️ Fasting Period</span>
-                  {fastingWindow && <span className="text-lg font-bold text-green-600">{fastingWindow}</span>}
-                </div>
-                <div className="flex gap-4 text-xs text-gray-600 flex-wrap">
-                  {yesterdayLog?.meal_times?.lastMealEnd && (
-                    <span>Last meal (yesterday): <strong>{
-                      (() => {
-                        const [h, m] = yesterdayLog.meal_times.lastMealEnd.split(':').map(Number);
-                        const p = h >= 12 ? 'PM' : 'AM';
-                        return `${h%12||12}:${m.toString().padStart(2,'0')} ${p}`;
-                      })()
-                    }</strong></span>
-                  )}
-                  {currentLog.meal_times?.meal1 && (
-                    <span>First meal (today): <strong>{
-                      (() => {
-                        const [h, m] = currentLog.meal_times.meal1.split(':').map(Number);
-                        const p = h >= 12 ? 'PM' : 'AM';
-                        return `${h%12||12}:${m.toString().padStart(2,'0')} ${p}`;
-                      })()
-                    }</strong></span>
-                  )}
-                  {!fastingWindow && !currentLog.meal_times?.meal1 && (
-                    <span className="text-gray-400">No data logged</span>
-                  )}
-                </div>
-              </div>
-
-              {/* Meals */}
-              <div className="bg-gray-50 rounded-xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="font-bold text-gray-700">🍽️ Meals</span>
-                  <span className={`w-6 h-6 rounded-md flex items-center justify-center ${currentLog.meals_check ? 'bg-green-500' : 'bg-gray-300'}`}>
-                    {currentLog.meals_check && <span className="text-white text-xs">✓</span>}
-                  </span>
-                </div>
-
-                {/* Bowl breakdown */}
-                <div className="flex gap-1.5 flex-wrap mb-2">
-                  {Object.entries(BOWL_TYPES).map(([id, bowl]) => {
-                    const count = currentLog.meal_bowls.filter((b) => b === id).length;
-                    if (count === 0) return null;
-                    return (
-                      <div key={id} className="px-2 py-1 rounded-lg text-xs font-bold text-white" style={{ backgroundColor: bowl.color }}>
-                        {bowl.label} ×{count}
-                      </div>
-                    );
-                  })}
-                  {currentLog.meal_bowls.filter(Boolean).length === 0 && (
-                    <span className="text-gray-400 text-xs">No bowls logged</span>
-                  )}
-                </div>
-
-                {/* Meal timing row */}
-                {(currentLog.meal_times?.meal1 || currentLog.meal_times?.meal2 || currentLog.meal_times?.meal3) && (
-                  <div className="flex gap-2 flex-wrap text-xs text-gray-500 mt-2 pt-2 border-t border-gray-200">
-                    {currentLog.meal_times?.meal1 && (
-                      <span className="bg-white px-2 py-1 rounded-lg border border-gray-200">
-                        M1: {(() => { const [h,m] = currentLog.meal_times.meal1.split(':').map(Number); return `${h%12||12}:${m.toString().padStart(2,'0')} ${h>=12?'PM':'AM'}`; })()}
-                      </span>
-                    )}
-                    {currentLog.meal_times?.meal2 && (
-                      <span className="bg-white px-2 py-1 rounded-lg border border-gray-200">
-                        M2: {(() => { const [h,m] = currentLog.meal_times.meal2.split(':').map(Number); return `${h%12||12}:${m.toString().padStart(2,'0')} ${h>=12?'PM':'AM'}`; })()}
-                      </span>
-                    )}
-                    {currentLog.meal_times?.meal3 && (
-                      <span className="bg-white px-2 py-1 rounded-lg border border-gray-200">
-                        M3: {(() => { const [h,m] = currentLog.meal_times.meal3.split(':').map(Number); return `${h%12||12}:${m.toString().padStart(2,'0')} ${h>=12?'PM':'AM'}`; })()}
-                      </span>
-                    )}
-                    {currentLog.meal_times?.lastMealEnd && (
-                      <span className="bg-white px-2 py-1 rounded-lg border border-gray-200">
-                        End: {(() => { const [h,m] = currentLog.meal_times.lastMealEnd.split(':').map(Number); return `${h%12||12}:${m.toString().padStart(2,'0')} ${h>=12?'PM':'AM'}`; })()}
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Food log details */}
-                {(currentLog.food_log?.meal1 || currentLog.food_log?.meal2 || currentLog.food_log?.meal3) && (
-                  <div className="mt-3 pt-2 border-t border-gray-200 space-y-1">
-                    {currentLog.food_log?.meal1 && (
-                      <p className="text-xs text-gray-600"><span className="font-semibold text-gray-700">M1:</span> {currentLog.food_log.meal1}</p>
-                    )}
-                    {currentLog.food_log?.meal2 && (
-                      <p className="text-xs text-gray-600"><span className="font-semibold text-gray-700">M2:</span> {currentLog.food_log.meal2}</p>
-                    )}
-                    {currentLog.food_log?.meal3 && (
-                      <p className="text-xs text-gray-600"><span className="font-semibold text-gray-700">M3:</span> {currentLog.food_log.meal3}</p>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Movement */}
-              <div className="bg-gray-50 rounded-xl p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-bold text-gray-700">🏃 Movement</span>
-                  <span className={`w-6 h-6 rounded-md flex items-center justify-center ${currentLog.movement_check ? 'bg-green-500' : 'bg-gray-300'}`}>
-                    {currentLog.movement_check && <span className="text-white text-xs">✓</span>}
-                  </span>
-                </div>
-                {(currentLog.movement_items[0] || currentLog.movement_items[1]) ? (
-                  <div className="text-sm text-gray-600 space-y-1">
-                    <p className="font-semibold text-gray-700">
-                      {[currentLog.movement_items[0] && 'Cardio', currentLog.movement_items[1] && 'Strength'].filter(Boolean).join(' + ')}
-                    </p>
-                    {currentLog.movement_duration && <p>{currentLog.movement_duration} minutes</p>}
-                    {currentLog.movement_steps && <p>{currentLog.movement_steps.toLocaleString()} steps</p>}
-                    {currentLog.movement_details && <p className="text-xs text-gray-500">{currentLog.movement_details}</p>}
-                  </div>
-                ) : currentLog.movement_items[2] ? (
-                  <p className="text-sm text-gray-500">Rest day 🛌</p>
-                ) : (
-                  <p className="text-sm text-gray-400">Not logged</p>
-                )}
-              </div>
-
-              {/* Supplements */}
-              {(currentLog.supplements_taken || []).length > 0 && (
-                <div className="bg-gray-50 rounded-xl p-4">
-                  <span className="font-bold text-gray-700">💊 Supplements</span>
-                  <div className="flex gap-1.5 flex-wrap mt-2">
-                    {(currentLog.supplements_taken || []).map(sup => (
-                      <span key={sup} className="text-xs bg-indigo-100 text-indigo-700 px-2 py-1 rounded-lg font-medium">{sup}</span>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Hydration + Sleep */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-gray-50 rounded-xl p-4">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold text-gray-700 text-sm">💧 Hydration</span>
-                    <span className={`w-5 h-5 rounded-md flex items-center justify-center ${currentLog.hydration_check ? 'bg-green-500' : 'bg-gray-300'}`}>
-                      {currentLog.hydration_check && <span className="text-white text-xs">✓</span>}
-                    </span>
-                  </div>
-                  <p className="text-lg font-bold text-cyan-600">{currentLog.hydration_items.filter(Boolean).length}L</p>
-                  <p className="text-xs text-gray-400">Target: 4L+</p>
-                </div>
-                <div className="bg-gray-50 rounded-xl p-4">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold text-gray-700 text-sm">😴 Sleep</span>
-                    <span className={`w-5 h-5 rounded-md flex items-center justify-center ${currentLog.sleep_check ? 'bg-green-500' : 'bg-gray-300'}`}>
-                      {currentLog.sleep_check && <span className="text-white text-xs">✓</span>}
-                    </span>
-                  </div>
-                  <p className="text-lg font-bold text-purple-600">{currentLog.sleep_items.filter(Boolean).length}h</p>
-                </div>
-              </div>
-
-              {/* Notes */}
-              {currentLog.notes && (
-                <div className="bg-gray-50 rounded-xl p-4">
-                  <span className="font-bold text-gray-700">📝 Notes</span>
-                  <p className="text-sm text-gray-600 mt-2 whitespace-pre-wrap">{currentLog.notes}</p>
-                </div>
-              )}
-            </div>
-
-            {/* Buttons */}
-            <div className="flex gap-3 mt-6">
-              <button
-                onClick={handleWhatsAppShare}
-                className="flex-1 bg-green-500 text-white py-3 rounded-xl font-semibold hover:bg-green-600 transition text-sm"
-              >
-                📋 Copy Again
-              </button>
-              <button
-                onClick={() => setShowSummary(false)}
-                className="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-semibold hover:bg-indigo-700 transition text-sm"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

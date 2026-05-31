@@ -4,61 +4,62 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { DailyLog } from '@/lib/types';
-import { formatDateForDB } from '@/lib/utils';
-import { ChevronLeft, CalendarRange, Save, TrendingDown, TrendingUp, Minus, Target } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, ResponsiveContainer } from 'recharts';
+import { formatDateForDB, formatDate } from '@/lib/utils';
+import { ChevronLeft, ChevronRight, Save, Share2 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Area, AreaChart } from 'recharts';
 
-interface MonthlySummary {
-  monthNumber: number;
-  monthStart: string;
-  daysTracked: number;
-  movementDays: number;
-  protocolAdherence: number;
-  weightStart: number | null;
-  weightEnd: number | null;
-  weightChange: number | null;
-  bestWeekStart: string | null;
+const PROGRAM_START_DATE = new Date('2026-06-01');
+
+// Get current month as YYYY-MM
+function getCurrentMonthString(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
-interface MonthlyReflection {
-  big_picture_progress: string;
-  data_patterns: string;
-  physical_transformation: string;
-  mental_shifts: string;
-  whats_working: string;
-  whats_not_working: string;
-  next_month_goals: string;
-  free_reflection: string;
+// Get month dates (1st to last day)
+function getMonthDates(monthString: string): { start: Date; end: Date } {
+  const [year, month] = monthString.split('-').map(Number);
+  const start = new Date(year, month - 1, 1);
+  const end = new Date(year, month, 0); // Last day of month
+  return { start, end };
 }
 
-interface UserGoals {
-  initial_weight: number | null;
-  goal_weight_min: number | null;
-  goal_weight_max: number | null;
+// Format month like "June 2026"
+function formatMonthDisplay(monthString: string): string {
+  const [year, month] = monthString.split('-').map(Number);
+  const date = new Date(year, month - 1, 1);
+  return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 }
 
-const PROGRAM_START_DATE = new Date('2026-05-22');
+// Format month with dates like "June 2026 (Jun 1-30)"
+function formatMonthWithDates(monthString: string): string {
+  const { start, end } = getMonthDates(monthString);
+  const monthName = start.toLocaleDateString('en-US', { month: 'short' });
+  const startDay = start.getDate();
+  const endDay = end.getDate();
+  const year = start.getFullYear();
+  const fullMonth = start.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  
+  return `${fullMonth} (${monthName} ${startDay}-${endDay})`;
+}
 
 export default function MonthlyReflectionPage() {
   const [user, setUser] = useState<any>(null);
+  const [currentMonth, setCurrentMonth] = useState(getCurrentMonthString());
+  const [allLogs, setAllLogs] = useState<DailyLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState<number>(1);
-  const [availableMonths, setAvailableMonths] = useState<number[]>([]);
-  const [summary, setSummary] = useState<MonthlySummary | null>(null);
-  const [goals, setGoals] = useState<UserGoals>({ initial_weight: null, goal_weight_min: null, goal_weight_max: null });
-  const [chartData, setChartData] = useState<any[]>([]);
-  const [reflection, setReflection] = useState<MonthlyReflection>({
-    big_picture_progress: '',
-    data_patterns: '',
-    physical_transformation: '',
-    mental_shifts: '',
-    whats_working: '',
-    whats_not_working: '',
-    next_month_goals: '',
-    free_reflection: '',
-  });
+  
+  // PHASE 3: Monthly reflection state
+  const [mentorWord, setMentorWord] = useState('');
+  const [mentorWordReflection, setMentorWordReflection] = useState('');
+  const [reflectionNotes, setReflectionNotes] = useState('');
+  const [userPreferences, setUserPreferences] = useState<any>(null);
+  
+  // PHASE 3: Share state
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareSummary, setShareSummary] = useState('');
 
   const router = useRouter();
   const supabase = createClient();
@@ -69,9 +70,16 @@ export default function MonthlyReflectionPage() {
 
   useEffect(() => {
     if (user) {
-      loadMonthlySummary(user.id, selectedMonth);
+      loadAllLogs(user.id);
+      loadUserPreferences(user.id);
     }
-  }, [selectedMonth, user]);
+  }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      loadMonthlyReflection();
+    }
+  }, [currentMonth, user]);
 
   async function checkUser() {
     const { data: { user } } = await supabase.auth.getUser();
@@ -80,201 +88,343 @@ export default function MonthlyReflectionPage() {
       router.push('/login');
     } else {
       setUser(user);
-      await loadUserGoals(user.id);
-      
-      const currentMonth = getCurrentMonthNumber();
-      setSelectedMonth(currentMonth);
-      
-      // Generate available months
-      const months = Array.from({ length: currentMonth }, (_, i) => i + 1);
-      setAvailableMonths(months);
     }
     setLoading(false);
   }
 
-  async function loadUserGoals(userId: string) {
+  async function loadAllLogs(userId: string) {
+    const { data } = await supabase
+      .from('daily_logs')
+      .select('*')
+      .eq('user_id', userId)
+      .order('log_date', { ascending: false });
+
+    if (data) {
+      setAllLogs(data as DailyLog[]);
+    }
+  }
+
+  async function loadUserPreferences(userId: string) {
     const { data } = await supabase
       .from('user_preferences')
-      .select('initial_weight, goal_weight_min, goal_weight_max')
+      .select('*')
       .eq('user_id', userId)
       .single();
 
     if (data) {
-      setGoals({
-        initial_weight: data.initial_weight,
-        goal_weight_min: data.goal_weight_min,
-        goal_weight_max: data.goal_weight_max,
-      });
+      setUserPreferences(data);
     }
   }
 
-  function getCurrentMonthNumber(): number {
-    const today = new Date();
-    const diffTime = today.getTime() - PROGRAM_START_DATE.getTime();
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    return Math.floor(diffDays / 30) + 1;
-  }
-
-  function getMonthDates(monthNumber: number): { start: Date; end: Date } {
-    const monthStart = new Date(PROGRAM_START_DATE);
-    monthStart.setDate(PROGRAM_START_DATE.getDate() + (monthNumber - 1) * 30);
+  async function loadMonthlyReflection() {
+    if (!user) return;
     
-    const monthEnd = new Date(monthStart);
-    monthEnd.setDate(monthStart.getDate() + 29);
+    const [year, month] = currentMonth.split('-').map(Number);
+    const monthNum = month;
     
-    return { start: monthStart, end: monthEnd };
-  }
-
-  async function loadMonthlySummary(userId: string, monthNumber: number) {
-    const { start, end } = getMonthDates(monthNumber);
-
-    const { data: logs } = await supabase
-      .from('daily_logs')
-      .select('*')
-      .eq('user_id', userId)
-      .gte('log_date', formatDateForDB(start))
-      .lte('log_date', formatDateForDB(end))
-      .order('log_date', { ascending: true });
-
-    if (logs && logs.length > 0) {
-      const logsData = logs as DailyLog[];
-      
-      const daysTracked = logsData.length;
-      const movementDays = logsData.filter(l => l.movement_check).length;
-      const mealsCheck = logsData.filter(l => l.meals_check).length;
-      const movementCheck = logsData.filter(l => l.movement_check).length;
-      const protocolAdherence = Math.round(((mealsCheck + movementCheck) / (daysTracked * 2)) * 100);
-
-      const logsWithWeight = logsData.filter(l => l.weight != null);
-      const weightStart: number | null = logsWithWeight.length > 0 ? logsWithWeight[0].weight! : null;
-      const weightEnd: number | null = logsWithWeight.length > 0 ? logsWithWeight[logsWithWeight.length - 1].weight! : null;
-      const weightChange: number | null = weightStart && weightEnd ? weightEnd - weightStart : null;
-
-      // Find best week
-      let bestWeekStart: string | null = null;
-      let bestWeekScore = 0;
-      
-      for (let i = 0; i <= logsData.length - 7; i++) {
-        const weekLogs = logsData.slice(i, i + 7);
-        const score = weekLogs.filter(l => l.meals_check && l.movement_check).length;
-        if (score > bestWeekScore) {
-          bestWeekScore = score;
-          bestWeekStart = weekLogs[0].log_date;
-        }
-      }
-
-      setSummary({
-        monthNumber,
-        monthStart: formatDateForDB(start),
-        daysTracked,
-        movementDays,
-        protocolAdherence,
-        weightStart,
-        weightEnd,
-        weightChange,
-        bestWeekStart,
-      });
-
-      // Build chart data
-      await buildChartData(userId, monthNumber, logsWithWeight);
-    } else {
-      const { start } = getMonthDates(monthNumber);
-      setSummary({
-        monthNumber,
-        monthStart: formatDateForDB(start),
-        daysTracked: 0,
-        movementDays: 0,
-        protocolAdherence: 0,
-        weightStart: null,
-        weightEnd: null,
-        weightChange: null,
-        bestWeekStart: null,
-      });
-      setChartData([]);
-    }
-
-    await loadExistingReflection(userId, monthNumber);
-  }
-
-  async function buildChartData(userId: string, monthNumber: number, monthLogs: DailyLog[]) {
-    // Get ALL logs from Day 1 to end of selected month for complete chart
-    const { end } = getMonthDates(monthNumber);
-    
-    const { data: allLogs } = await supabase
-      .from('daily_logs')
-      .select('log_date, weight')
-      .eq('user_id', userId)
-      .gte('log_date', formatDateForDB(PROGRAM_START_DATE))
-      .lte('log_date', formatDateForDB(end))
-      .order('log_date', { ascending: true });
-
-    if (allLogs && allLogs.length > 0) {
-      const logsWithWeight = allLogs.filter(l => l.weight != null) as DailyLog[];
-      
-      const data = logsWithWeight.map((log, index) => ({
-        day: index + 1,
-        weight: log.weight!,
-        goalMin: goals.goal_weight_min,
-        goalMax: goals.goal_weight_max,
-      }));
-
-      setChartData(data);
-    }
-  }
-
-  async function loadExistingReflection(userId: string, monthNumber: number) {
     const { data } = await supabase
       .from('monthly_reflections')
       .select('*')
-      .eq('user_id', userId)
-      .eq('month_number', monthNumber)
+      .eq('user_id', user.id)
+      .eq('month_number', monthNum)
+      .eq('year', year)
       .single();
-
+    
     if (data) {
-      setReflection({
-        big_picture_progress: data.big_picture_progress || '',
-        data_patterns: data.data_patterns || '',
-        physical_transformation: data.physical_transformation || '',
-        mental_shifts: data.mental_shifts || '',
-        whats_working: data.whats_working || '',
-        whats_not_working: data.whats_not_working || '',
-        next_month_goals: data.next_month_goals || '',
-        free_reflection: data.free_reflection || '',
-      });
+      setMentorWord(data.mentor_word || '');
+      setMentorWordReflection(data.mentor_word_reflection || '');
+      setReflectionNotes(data.notes || '');
     } else {
-      setReflection({
-        big_picture_progress: '',
-        data_patterns: '',
-        physical_transformation: '',
-        mental_shifts: '',
-        whats_working: '',
-        whats_not_working: '',
-        next_month_goals: '',
-        free_reflection: '',
-      });
+      setMentorWord('');
+      setMentorWordReflection('');
+      setReflectionNotes('');
     }
   }
 
+  // PHASE 3: Get weight data for the month - FIXED: Include ALL dates with interpolation for continuous line
+  function getMonthWeightData(): Array<{ date: string; weight?: number; fullDate: string }> {
+    const { start, end } = getMonthDates(currentMonth);
+    const logsMap = new Map<string, number>();
+    
+    // Build map of dates with actual logged weight
+    allLogs
+      .filter(log => {
+        const logDate = new Date(log.log_date);
+        return logDate >= start && logDate <= end && log.weight;
+      })
+      .forEach(log => {
+        logsMap.set(log.log_date, log.weight!);
+      });
+    
+    // Generate all dates in range with interpolated values
+    const result: Array<{ date: string; weight?: number; fullDate: string }> = [];
+    const current = new Date(start);
+    const sortedDates = Array.from(logsMap.keys()).sort();
+    
+    while (current <= end) {
+      const dateStr = formatDateForDB(current);
+      const actualWeight = logsMap.get(dateStr);
+      
+      let weight: number | undefined;
+      if (actualWeight !== undefined) {
+        weight = actualWeight; // Use actual logged weight
+      } else {
+        // Interpolate: find surrounding logged dates
+        const surroundingDates = sortedDates.filter(d => d >= dateStr);
+        const prevDate = sortedDates.filter(d => d < dateStr).pop();
+        const nextDate = surroundingDates[0];
+        
+        if (prevDate && nextDate) {
+          const prevWeight = logsMap.get(prevDate)!;
+          const nextWeight = logsMap.get(nextDate)!;
+          const prevDateObj = new Date(prevDate);
+          const nextDateObj = new Date(nextDate);
+          const currentDateObj = new Date(dateStr);
+          
+          // Linear interpolation
+          const totalDays = (nextDateObj.getTime() - prevDateObj.getTime()) / (1000 * 60 * 60 * 24);
+          const daysPassed = (currentDateObj.getTime() - prevDateObj.getTime()) / (1000 * 60 * 60 * 24);
+          weight = prevWeight + ((nextWeight - prevWeight) * daysPassed) / totalDays;
+        } else if (prevDate) {
+          weight = logsMap.get(prevDate)!; // Use last known weight
+        } else if (nextDate) {
+          weight = logsMap.get(nextDate)!; // Use next known weight
+        }
+      }
+      
+      result.push({
+        date: current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        ...(weight !== undefined && { weight: Math.round(weight * 10) / 10 }), // Round to 1 decimal
+        fullDate: dateStr,
+      });
+      current.setDate(current.getDate() + 1);
+    }
+    
+    return result;
+  }
+
+  // PHASE 3: Get all weight data since start - FIXED: Include interpolation for continuous line
+  function getAllWeightData(): Array<{ date: string; weight?: number; fullDate: string }> {
+    const logsMap = new Map<string, number>();
+    
+    // Build map of dates with actual logged weight
+    allLogs
+      .filter(log => log.weight)
+      .forEach(log => {
+        logsMap.set(log.log_date, log.weight!);
+      });
+    
+    // Generate all dates from program start to most recent log with interpolated values
+    const result: Array<{ date: string; weight?: number; fullDate: string }> = [];
+    const start = new Date(PROGRAM_START_DATE);
+    const end = new Date();
+    
+    const sortedDates = Array.from(logsMap.keys()).sort();
+    const current = new Date(start);
+    
+    while (current <= end) {
+      const dateStr = formatDateForDB(current);
+      const actualWeight = logsMap.get(dateStr);
+      
+      let weight: number | undefined;
+      if (actualWeight !== undefined) {
+        weight = actualWeight; // Use actual logged weight
+      } else {
+        // Interpolate: find surrounding logged dates
+        const surroundingDates = sortedDates.filter(d => d >= dateStr);
+        const prevDate = sortedDates.filter(d => d < dateStr).pop();
+        const nextDate = surroundingDates[0];
+        
+        if (prevDate && nextDate) {
+          const prevWeight = logsMap.get(prevDate)!;
+          const nextWeight = logsMap.get(nextDate)!;
+          const prevDateObj = new Date(prevDate);
+          const nextDateObj = new Date(nextDate);
+          const currentDateObj = new Date(dateStr);
+          
+          // Linear interpolation
+          const totalDays = (nextDateObj.getTime() - prevDateObj.getTime()) / (1000 * 60 * 60 * 24);
+          const daysPassed = (currentDateObj.getTime() - prevDateObj.getTime()) / (1000 * 60 * 60 * 24);
+          weight = prevWeight + ((nextWeight - prevWeight) * daysPassed) / totalDays;
+        } else if (prevDate) {
+          weight = logsMap.get(prevDate)!; // Use last known weight
+        } else if (nextDate) {
+          weight = logsMap.get(nextDate)!; // Use next known weight
+        }
+      }
+      
+      result.push({
+        date: current.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+        ...(weight !== undefined && { weight: Math.round(weight * 10) / 10 }), // Round to 1 decimal
+        fullDate: dateStr,
+      });
+      current.setDate(current.getDate() + 1);
+    }
+    
+    return result;
+  }
+
+  // PHASE 3: Calculate goal progress
+  function calculateGoalProgress() {
+    if (!userPreferences || !userPreferences.initial_weight) {
+      return { current: 0, goal: 0, lost: 0, remaining: 0, percentage: 0 };
+    }
+
+    const initial = userPreferences.initial_weight;
+    const goalMin = userPreferences.goal_weight_min || initial * 0.85; // Default: 15% loss
+    // FIX: Use [0] instead of .pop() because logs are in descending order (most recent first)
+    // .pop() gets the OLDEST, [0] gets the NEWEST (most recent)
+    const current = allLogs.filter(l => l.weight)[0]?.weight || initial;
+    
+    const lost = initial - current;
+    const totalGoal = initial - goalMin;
+    const percentage = totalGoal > 0 ? (lost / totalGoal) * 100 : 0;
+    
+    return {
+      current,
+      goal: goalMin,
+      lost: Math.max(0, lost),
+      remaining: Math.max(0, current - goalMin),
+      percentage: Math.min(100, Math.max(0, percentage)),
+    };
+  }
+
+  // PHASE 3: Generate comprehensive monthly summary
+  function generateMonthlySummaryText(): string {
+    const lines: string[] = [];
+    const divider = '═══════════════════════════';
+    const monthlyData = getMonthWeightData();
+    const allData = getAllWeightData();
+    const goalProgress = calculateGoalProgress();
+
+    // ── HEADER ──
+    lines.push(`🌿 *MIMIC GLP-1 - MONTHLY REFLECTION*`);
+    lines.push(formatMonthWithDates(currentMonth));
+    lines.push(divider);
+    lines.push('');
+
+    // ── GOAL PROGRESS ──
+    lines.push(`🎯 *GOAL PROGRESS*`);
+    lines.push(`Current Weight: *${goalProgress.current.toFixed(1)} kg*`);
+    lines.push(`Goal Weight: ${goalProgress.goal.toFixed(1)} kg`);
+    lines.push(`Lost This Phase: *${goalProgress.lost.toFixed(1)} kg* (${Math.round(goalProgress.percentage)}%)`);
+    lines.push(`Remaining to Goal: ${goalProgress.remaining.toFixed(1)} kg`);
+    lines.push('');
+
+    // ── MONTHLY WEIGHT JOURNEY ──
+    if (monthlyData.length > 0) {
+      lines.push(`📈 *THIS MONTH'S WEIGHT JOURNEY*`);
+      monthlyData.forEach((entry, idx) => {
+        const date = new Date(entry.fullDate).toLocaleDateString('en-US', { 
+          weekday: 'short', 
+          month: 'short', 
+          day: 'numeric' 
+        });
+        lines.push(`   ${date}: ${entry.weight} kg`);
+      });
+      
+      if (monthlyData.length > 1) {
+        const first = monthlyData[0]?.weight;
+        const last = monthlyData[monthlyData.length - 1]?.weight;
+        if (first && last) {
+          const monthChange = (first - last).toFixed(1);
+          const direction = parseFloat(monthChange) > 0 ? '↓ Lost' : parseFloat(monthChange) < 0 ? '↑ Gained' : '= No change';
+          lines.push(`   Month change: ${direction} ${Math.abs(parseFloat(monthChange))} kg`);
+        }
+      }
+      lines.push('');
+    }
+
+    // ── OVERALL JOURNEY ──
+    if (allData.length > 0) {
+      const startWeight = allData[0]?.weight;
+      const currentWeight = allData[allData.length - 1]?.weight;
+      if (startWeight && currentWeight) {
+        const totalLoss = (startWeight - currentWeight).toFixed(1);
+        lines.push(`🚀 *OVERALL JOURNEY (SINCE START)*`);
+        lines.push(`   Start: ${startWeight} kg`);
+        lines.push(`   Current: ${currentWeight} kg`);
+        lines.push(`   Total Loss: ${totalLoss} kg`);
+        lines.push(`   Duration: ${allData.length} days tracked`);
+        lines.push('');
+      }
+    }
+
+    // ── MENTOR'S WORD REFLECTION ──
+    if (mentorWord) {
+      lines.push(`💭 *MENTOR'S WORD: "${mentorWord}"*`);
+      if (mentorWordReflection) {
+        lines.push(mentorWordReflection);
+      }
+      lines.push('');
+    }
+
+    // ── OTHER REFLECTIONS ──
+    if (reflectionNotes) {
+      lines.push(`📝 *MONTHLY REFLECTIONS*`);
+      lines.push(reflectionNotes);
+      lines.push('');
+    }
+
+    // ── FOOTER ──
+    lines.push(divider);
+    lines.push(`Generated: ${new Date().toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    })}`);
+
+    return lines.join('\n');
+  }
+
+  // PHASE 3: Handle share button
+  async function handleMonthlyShare() {
+    const summaryText = generateMonthlySummaryText();
+    setShareSummary(summaryText);
+    
+    // Copy to clipboard
+    try {
+      await navigator.clipboard.writeText(summaryText);
+      showMessage('Monthly summary copied to clipboard! ✓', 'success');
+    } catch (error) {
+      // Fallback
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = summaryText;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        showMessage('Monthly summary copied to clipboard! ✓', 'success');
+      } catch (fallbackError) {
+        showMessage('Could not copy to clipboard', 'error');
+      }
+    }
+    
+    setShowShareModal(true);
+  }
+
   async function saveReflection() {
-    if (!user || !summary) return;
+    if (!user) return;
     setSaving(true);
 
     try {
+      const [year, month] = currentMonth.split('-').map(Number);
+      
       await supabase.from('monthly_reflections').upsert({
         user_id: user.id,
-        month_number: summary.monthNumber,
-        month_start_date: summary.monthStart,
-        days_tracked: summary.daysTracked,
-        movement_days: summary.movementDays,
-        protocol_adherence: summary.protocolAdherence,
-        weight_start: summary.weightStart,
-        weight_end: summary.weightEnd,
-        weight_change: summary.weightChange,
-        best_week_start: summary.bestWeekStart,
-        ...reflection,
+        year,
+        month_number: month,
+        mentor_word: mentorWord,
+        mentor_word_reflection: mentorWordReflection,
+        notes: reflectionNotes,
+        updated_at: new Date().toISOString(),
       });
 
-      showMessage('Reflection saved successfully! ✓', 'success');
+      showMessage('Monthly reflection saved! ✓', 'success');
     } catch (error: any) {
       showMessage('Error: ' + error.message, 'error');
     } finally {
@@ -287,361 +437,283 @@ export default function MonthlyReflectionPage() {
     setTimeout(() => setMessage(''), 3000);
   }
 
-  function calculateProgress() {
-    if (!goals.initial_weight || !goals.goal_weight_min || !summary?.weightEnd) return null;
-    
-    const totalLossNeeded = goals.initial_weight - goals.goal_weight_min;
-    const currentLoss = goals.initial_weight - summary.weightEnd;
-    const progress = (currentLoss / totalLossNeeded) * 100;
-    
-    return {
-      progress: Math.round(progress),
-      remaining: goals.goal_weight_min - summary.weightEnd,
-      completed: currentLoss,
-    };
-  }
-
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500">
-        <div className="text-white text-xl font-semibold">Loading...</div>
-      </div>
-    );
+    return <div className="flex items-center justify-center min-h-screen">Loading...</div>;
   }
 
-  const progress = calculateProgress();
+  const monthlyWeightData = getMonthWeightData();
+  const allWeightData = getAllWeightData();
+  const goalProgress = calculateGoalProgress();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50">
-      {/* Header */}
-      <div className="bg-gradient-to-br from-pink-500 via-pink-600 to-purple-600 text-white p-6 md:p-8 shadow-lg">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex justify-between items-center mb-4">
+    <div className="min-h-screen bg-gradient-to-br from-purple-500 via-pink-500 to-red-500">
+      {/* Share Modal */}
+      {showShareModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-96 overflow-auto">
+            <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-bold">📋 Monthly Summary</h3>
+              <button
+                onClick={() => setShowShareModal(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-6 whitespace-pre-wrap font-mono text-sm max-w-2xl overflow-auto max-h-80">
+              {shareSummary}
+            </div>
+            <div className="p-4 border-t border-gray-200 flex gap-2">
+              <button
+                onClick={handleMonthlyShare}
+                className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition flex items-center justify-center gap-2"
+              >
+                <Share2 size={16} />
+                Copy Again
+              </button>
+              <button
+                onClick={() => setShowShareModal(false)}
+                className="flex-1 px-4 py-2 bg-gray-300 text-gray-900 rounded-lg font-semibold hover:bg-gray-400 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Top Navigation */}
+      <div className="bg-black/30 text-white">
+        <div className="max-w-4xl mx-auto p-4 md:p-6">
+          <div className="flex items-center justify-between mb-6">
             <button
               onClick={() => router.push('/dashboard')}
-              className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition text-sm font-semibold backdrop-blur-sm"
+              className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition font-semibold"
             >
-              <ChevronLeft size={18} />
+              <ChevronLeft size={16} />
               Dashboard
             </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleMonthlyShare}
+                className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition font-semibold"
+              >
+                <Share2 size={16} />
+                Share
+              </button>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="bg-white/20 p-4 rounded-xl backdrop-blur-sm">
-              <CalendarRange size={40} />
-            </div>
-            <div>
-              <h1 className="text-3xl md:text-4xl font-bold">Monthly Reflection</h1>
-              <p className="text-white/80 mt-1">Month {selectedMonth} Review</p>
-            </div>
+
+          {/* PHASE 3: Prominent month display with dates */}
+          <div className="bg-white/10 backdrop-blur-sm rounded-xl px-6 py-4">
+            <div className="text-sm opacity-80 mb-1">Current Month</div>
+            <div className="text-3xl font-bold mb-2">{formatMonthDisplay(currentMonth)}</div>
+            <div className="text-sm opacity-90">{formatMonthWithDates(currentMonth)}</div>
           </div>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto p-6 md:p-8">
-        {/* Month Selector */}
-        <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">📅 Select Month</h2>
-          <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
-            className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none text-lg font-semibold"
+      <div className="max-w-4xl mx-auto p-4 md:p-6">
+        {/* Message Display */}
+        {message && (
+          <div className={`mb-6 p-4 rounded-lg font-semibold ${message.includes('Error') ? 'bg-red-100 text-red-900' : 'bg-green-100 text-green-900'}`}>
+            {message}
+          </div>
+        )}
+
+        {/* Month Navigation */}
+        <div className="bg-white rounded-xl shadow-md p-4 mb-6 flex items-center gap-3">
+          <button
+            onClick={() => {
+              const [year, month] = currentMonth.split('-').map(Number);
+              const prevMonth = month === 1 ? 12 : month - 1;
+              const prevYear = month === 1 ? year - 1 : year;
+              setCurrentMonth(`${prevYear}-${String(prevMonth).padStart(2, '0')}`);
+            }}
+            className="px-4 py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition flex items-center gap-2"
           >
-            {availableMonths.map(month => {
-              const { start, end } = getMonthDates(month);
-              return (
-                <option key={month} value={month}>
-                  Month {month} ({start.toLocaleDateString()} - {end.toLocaleDateString()})
-                </option>
-              );
-            })}
-          </select>
+            <ChevronLeft size={20} />
+            Prev Month
+          </button>
+          
+          <input
+            type="month"
+            value={currentMonth}
+            onChange={(e) => setCurrentMonth(e.target.value)}
+            className="flex-1 px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-purple-500 focus:outline-none text-center font-bold"
+          />
+
+          <button
+            onClick={() => {
+              const [year, month] = currentMonth.split('-').map(Number);
+              const nextMonth = month === 12 ? 1 : month + 1;
+              const nextYear = month === 12 ? year + 1 : year;
+              setCurrentMonth(`${nextYear}-${String(nextMonth).padStart(2, '0')}`);
+            }}
+            className="px-4 py-2 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 transition flex items-center gap-2"
+          >
+            Next Month
+            <ChevronRight size={20} />
+          </button>
         </div>
 
-        {/* Goal Progress */}
-        {goals.initial_weight && goals.goal_weight_min && summary && summary.weightEnd && progress && (
-          <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-6 mb-6">
-            <div className="flex items-center gap-2 mb-4">
-              <Target className="text-green-600" size={24} />
-              <h2 className="text-xl font-bold text-gray-900">🎯 Goal Progress</h2>
+        {/* PHASE 3: Goal Progress */}
+        <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">🎯 Goal Progress</h2>
+          
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-4">
+              <div className="text-sm text-gray-600 mb-1">Current Weight</div>
+              <div className="text-3xl font-bold text-blue-600">{goalProgress.current.toFixed(1)} kg</div>
             </div>
-            
-            <div className="grid md:grid-cols-2 gap-6">
-              <div>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-700">Starting Weight:</span>
-                    <span className="font-bold text-gray-900">{goals.initial_weight} kg</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-700">Current Weight:</span>
-                    <span className="font-bold text-green-700">{summary.weightEnd} kg</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-700">Minimum Goal:</span>
-                    <span className="font-bold text-indigo-700">{goals.goal_weight_min} kg</span>
-                  </div>
-                  {goals.goal_weight_max && (
-                    <div className="flex justify-between">
-                      <span className="text-gray-700">Secondary Goal:</span>
-                      <span className="font-bold text-purple-700">{goals.goal_weight_max} kg</span>
-                    </div>
-                  )}
-                </div>
-              </div>
+            <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
+              <div className="text-sm text-gray-600 mb-1">Goal Weight</div>
+              <div className="text-3xl font-bold text-green-600">{goalProgress.goal.toFixed(1)} kg</div>
+            </div>
+          </div>
 
+          <div className="bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-semibold text-gray-700">Progress to Goal:</span>
+              <span className="text-2xl font-bold text-purple-600">{Math.round(goalProgress.percentage)}%</span>
+            </div>
+            <div className="w-full h-4 bg-white/50 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-300"
+                style={{ width: `${goalProgress.percentage}%` }}
+              />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-4 text-sm">
               <div>
-                <div className="mb-2 flex justify-between">
-                  <span className="text-sm font-semibold text-gray-700">Progress to Goal:</span>
-                  <span className="text-sm font-bold text-green-600">{progress.progress}%</span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-6 overflow-hidden">
-                  <div 
-                    className="bg-gradient-to-r from-green-500 to-emerald-500 h-6 rounded-full transition-all duration-500 flex items-center justify-end pr-2"
-                    style={{ width: `${Math.min(progress.progress, 100)}%` }}
-                  >
-                    {progress.progress >= 10 && (
-                      <span className="text-xs font-bold text-white">{progress.progress}%</span>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="mt-4 space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Weight Lost:</span>
-                    <span className="font-bold text-green-600">{progress.completed.toFixed(1)} kg</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-600">Remaining to Goal:</span>
-                    <span className="font-bold text-orange-600">{Math.abs(progress.remaining).toFixed(1)} kg</span>
-                  </div>
-                </div>
+                <span className="text-gray-600">Lost: </span>
+                <span className="font-bold text-green-600">{goalProgress.lost.toFixed(1)} kg</span>
               </div>
+              <div>
+                <span className="text-gray-600">Remaining: </span>
+                <span className="font-bold text-orange-600">{goalProgress.remaining.toFixed(1)} kg</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* PHASE 3: Monthly Weight Journey Chart */}
+        {monthlyWeightData.length > 0 && (
+          <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-4">📊 This Month's Weight Journey</h2>
+            <div className="h-64 bg-gray-50 rounded-lg p-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={monthlyWeightData}>
+                  <defs>
+                    <linearGradient id="colorWeight" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#a855f7" stopOpacity={0.8}/>
+                      <stop offset="95%" stopColor="#a855f7" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                  <YAxis domain={['dataMin - 1', 'dataMax + 1']} />
+                  <Tooltip 
+                    formatter={(value) => `${value} kg`}
+                    contentStyle={{ backgroundColor: '#f3f4f6', border: '1px solid #d1d5db' }}
+                  />
+                  <Area type="monotone" dataKey="weight" stroke="#a855f7" strokeWidth={2} fillOpacity={1} fill="url(#colorWeight)" />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
           </div>
         )}
 
-        {/* Weight Progress Chart */}
-        {chartData.length > 0 && goals.initial_weight && goals.goal_weight_min && (
+        {/* PHASE 3: Overall Journey Chart */}
+        {allWeightData.length > 0 && (
           <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">📈 Weight Progress Chart</h2>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="day" label={{ value: 'Day', position: 'insideBottom', offset: -5 }} />
-                <YAxis label={{ value: 'Weight (kg)', angle: -90, position: 'insideLeft' }} />
-                <Tooltip />
-                <Legend />
-                
-                {/* Goal lines */}
-                <ReferenceLine y={goals.initial_weight} stroke="#94a3b8" strokeDasharray="3 3" label="Start" />
-                <ReferenceLine y={goals.goal_weight_min} stroke="#22c55e" strokeWidth={2} label="Min Goal" />
-                {goals.goal_weight_max && (
-                  <ReferenceLine y={goals.goal_weight_max} stroke="#a855f7" strokeWidth={2} label="Max Goal" />
-                )}
-                
-                {/* Actual weight line */}
-                <Line type="monotone" dataKey="weight" stroke="#ec4899" strokeWidth={3} dot={{ r: 2 }} name="Your Weight" />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-
-        {/* Data Summary */}
-        {summary && summary.daysTracked > 0 ? (
-          <div className="bg-white rounded-xl shadow-md p-6 mb-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">📊 Month {summary.monthNumber} Summary</h2>
-            
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
-              <div className="bg-indigo-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Days Tracked</div>
-                <div className="text-2xl font-bold text-indigo-600">{summary.daysTracked}/30</div>
-              </div>
-              <div className="bg-pink-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Movement Days</div>
-                <div className="text-2xl font-bold text-pink-600">{summary.movementDays}/30</div>
-              </div>
-              <div className="bg-green-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Protocol Adherence</div>
-                <div className="text-2xl font-bold text-green-600">{summary.protocolAdherence}%</div>
-              </div>
+            <h2 className="text-xl font-bold text-gray-900 mb-4">🚀 Overall Journey (Since Start)</h2>
+            <div className="h-64 bg-gray-50 rounded-lg p-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={allWeightData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tick={{ fontSize: 12 }} />
+                  <YAxis domain={['dataMin - 1', 'dataMax + 1']} />
+                  <Tooltip 
+                    formatter={(value) => `${value} kg`}
+                    contentStyle={{ backgroundColor: '#f3f4f6', border: '1px solid #d1d5db' }}
+                  />
+                  <Line type="monotone" dataKey="weight" stroke="#ec4899" strokeWidth={2} dot={{ fill: '#ec4899', r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
-
-            {summary.weightStart && summary.weightEnd && (
-              <div className="bg-gradient-to-r from-pink-50 to-purple-50 border-2 border-pink-200 rounded-lg p-4 mb-4">
-                <div className="flex items-center justify-between">
+            {allWeightData.length > 1 && (
+              <div className="mt-4 p-4 bg-pink-50 border-2 border-pink-200 rounded-lg">
+                <div className="grid grid-cols-3 gap-4 text-sm">
                   <div>
-                    <div className="text-sm font-semibold text-gray-600 mb-1">Weight Progress (30 Days)</div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-lg text-gray-700">{summary.weightStart} kg</span>
-                      <span className="text-gray-400">→</span>
-                      <span className="text-lg font-bold text-gray-900">{summary.weightEnd} kg</span>
-                    </div>
+                    <span className="text-gray-600">Start: </span>
+                    <span className="font-bold">{allWeightData[0]?.weight || 'N/A'} kg</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    {summary.weightChange && (
-                      <>
-                        {summary.weightChange < 0 ? (
-                          <TrendingDown className="text-green-600" size={24} />
-                        ) : summary.weightChange > 0 ? (
-                          <TrendingUp className="text-red-600" size={24} />
-                        ) : (
-                          <Minus className="text-gray-400" size={24} />
-                        )}
-                        <span className={`text-2xl font-bold ${
-                          summary.weightChange < 0 ? 'text-green-600' : 
-                          summary.weightChange > 0 ? 'text-red-600' : 
-                          'text-gray-400'
-                        }`}>
-                          {summary.weightChange > 0 ? '+' : ''}{summary.weightChange.toFixed(1)} kg
-                        </span>
-                      </>
-                    )}
+                  <div>
+                    <span className="text-gray-600">Current: </span>
+                    <span className="font-bold">{allWeightData[allWeightData.length - 1]?.weight || 'N/A'} kg</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-600">Total Loss: </span>
+                    <span className="font-bold text-green-600">
+                      {(
+                        (allWeightData[0]?.weight || 0) - (allWeightData[allWeightData.length - 1]?.weight || 0)
+                      ).toFixed(1)}{' '}
+                      kg
+                    </span>
                   </div>
                 </div>
               </div>
             )}
-
-            {summary.bestWeekStart && (
-              <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-4">
-                <div className="text-sm font-semibold text-gray-600 mb-1">🏆 Best Week</div>
-                <div className="text-lg font-bold text-yellow-700">
-                  Week starting {new Date(summary.bestWeekStart).toLocaleDateString()}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-6 mb-6">
-            <p className="text-yellow-900 font-semibold">No daily logs found for Month {selectedMonth}. Complete some daily logs first!</p>
           </div>
         )}
 
-        {/* Reflection Questions */}
-        <div className="space-y-6">
-          {/* Question 1 */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">🎯 Big Picture Progress</h3>
-            <p className="text-sm text-gray-600 mb-3">Looking back 30 days, what's the biggest win? How do you feel compared to Day 1?</p>
-            <textarea
-              value={reflection.big_picture_progress}
-              onChange={(e) => setReflection({ ...reflection, big_picture_progress: e.target.value })}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none resize-none"
-              rows={4}
-              placeholder="Reflect on your overall progress..."
-            />
-          </div>
+        {/* PHASE 3: Mentor's Word - PRIORITY SECTION */}
+        <div className="bg-white rounded-xl shadow-md p-6 mb-6 border-4 border-purple-500">
+          <h2 className="text-xl font-bold text-purple-900 mb-4">💭 Mentor's Word & Reflection</h2>
+          <p className="text-sm text-gray-600 mb-3 italic">This month's mentor-provided word:</p>
+          
+          <input
+            type="text"
+            value={mentorWord}
+            onChange={(e) => setMentorWord(e.target.value)}
+            placeholder="Enter the mentor's word for this month..."
+            className="w-full px-4 py-3 border-2 border-purple-300 rounded-lg focus:border-purple-500 focus:outline-none font-bold text-lg mb-4"
+          />
+          
+          <label className="block text-sm font-semibold text-gray-700 mb-2">Reflect on this word:</label>
+          <textarea
+            value={mentorWordReflection}
+            onChange={(e) => setMentorWordReflection(e.target.value)}
+            placeholder="How did this word apply to your month? What does it mean to you?"
+            className="w-full px-4 py-3 border-2 border-purple-200 rounded-lg focus:border-purple-500 focus:outline-none resize-none text-sm"
+            rows={4}
+          />
+        </div>
 
-          {/* Question 2 */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">📊 Data Patterns</h3>
-            <p className="text-sm text-gray-600 mb-3">What patterns do you notice? Best days vs. tough days - what's different?</p>
-            <textarea
-              value={reflection.data_patterns}
-              onChange={(e) => setReflection({ ...reflection, data_patterns: e.target.value })}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none resize-none"
-              rows={4}
-              placeholder="Share patterns you've noticed..."
-            />
-          </div>
-
-          {/* Question 3 */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">🧬 Physical Transformation</h3>
-            <p className="text-sm text-gray-600 mb-3">Body composition changes? Energy, stamina, strength? How do you FEEL in your body?</p>
-            <textarea
-              value={reflection.physical_transformation}
-              onChange={(e) => setReflection({ ...reflection, physical_transformation: e.target.value })}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none resize-none"
-              rows={4}
-              placeholder="Describe your physical changes..."
-            />
-          </div>
-
-          {/* Question 4 */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">🧠 Mental Shifts</h3>
-            <p className="text-sm text-gray-600 mb-3">Has your relationship with food changed? Mindset shifts around health/discipline?</p>
-            <textarea
-              value={reflection.mental_shifts}
-              onChange={(e) => setReflection({ ...reflection, mental_shifts: e.target.value })}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none resize-none"
-              rows={4}
-              placeholder="Reflect on mental changes..."
-            />
-          </div>
-
-          {/* Question 5 */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">✅ What's Working</h3>
-            <p className="text-sm text-gray-600 mb-3">Which protocol elements work best for you? What makes adherence easy?</p>
-            <textarea
-              value={reflection.whats_working}
-              onChange={(e) => setReflection({ ...reflection, whats_working: e.target.value })}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none resize-none"
-              rows={4}
-              placeholder="List what's working well..."
-            />
-          </div>
-
-          {/* Question 6 */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">⚠️ What's Not Working</h3>
-            <p className="text-sm text-gray-600 mb-3">What consistently challenges you? Any parts feel unsustainable?</p>
-            <textarea
-              value={reflection.whats_not_working}
-              onChange={(e) => setReflection({ ...reflection, whats_not_working: e.target.value })}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none resize-none"
-              rows={4}
-              placeholder="Be honest about challenges..."
-            />
-          </div>
-
-          {/* Question 7 */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">🎯 Next 30 Days</h3>
-            <p className="text-sm text-gray-600 mb-3">What's your main goal? What will you keep/change? How will you measure success?</p>
-            <textarea
-              value={reflection.next_month_goals}
-              onChange={(e) => setReflection({ ...reflection, next_month_goals: e.target.value })}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none resize-none"
-              rows={4}
-              placeholder="Set your goals for next month..."
-            />
-          </div>
-
-          {/* Question 8 */}
-          <div className="bg-white rounded-xl shadow-md p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-2">📝 Free Reflection</h3>
-            <p className="text-sm text-gray-600 mb-3">Anything else on your mind? Learnings, insights, or thoughts?</p>
-            <textarea
-              value={reflection.free_reflection}
-              onChange={(e) => setReflection({ ...reflection, free_reflection: e.target.value })}
-              className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-pink-500 focus:outline-none resize-none"
-              rows={4}
-              placeholder="Share any additional thoughts..."
-            />
-          </div>
+        {/* PHASE 3: Other Reflections */}
+        <div className="bg-white rounded-xl shadow-md p-6 mb-6">
+          <h2 className="text-xl font-bold text-gray-900 mb-4">📝 Monthly Reflection Notes</h2>
+          <textarea
+            value={reflectionNotes}
+            onChange={(e) => setReflectionNotes(e.target.value)}
+            placeholder="How was this month overall? Key learnings, challenges, wins?"
+            className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-purple-500 focus:outline-none resize-none text-sm"
+            rows={6}
+          />
         </div>
 
         {/* Save Button */}
-        <button
-          onClick={saveReflection}
-          disabled={saving}
-          className="w-full mt-6 bg-gradient-to-r from-pink-600 to-purple-600 text-white font-bold py-4 px-6 rounded-xl hover:from-pink-700 hover:to-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg flex items-center justify-center gap-2"
-        >
-          <Save size={20} />
-          {saving ? 'Saving...' : `Save Month ${summary?.monthNumber} Reflection`}
-        </button>
-      </div>
-
-      {/* Message Toast */}
-      {message && (
-        <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl shadow-xl font-semibold ${
-          message.includes('Error') ? 'bg-red-500' : 'bg-green-500'
-        } text-white z-50`}>
-          {message}
+        <div className="flex gap-3 mb-6">
+          <button
+            onClick={saveReflection}
+            disabled={saving}
+            className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 transition disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            <Save size={20} />
+            {saving ? 'Saving...' : 'Save Reflection'}
+          </button>
         </div>
-      )}
+      </div>
     </div>
   );
 }

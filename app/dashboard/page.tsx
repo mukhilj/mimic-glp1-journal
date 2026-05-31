@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { Calendar, TrendingDown, Target, BookOpen, CalendarDays, CalendarRange, LogOut } from 'lucide-react';
+import { Calendar, TrendingDown, Target, BookOpen, CalendarDays, CalendarRange, LogOut, Droplet } from 'lucide-react';
 
 export default function DashboardPage() {
   const [user, setUser] = useState<any>(null);
@@ -117,13 +117,21 @@ export default function DashboardPage() {
               <h1 className="text-3xl md:text-4xl font-bold">Health Dashboard</h1>
               <p className="text-white/80 mt-1">Welcome back, {user?.email?.split('@')[0]}!</p>
             </div>
-            <button
-              onClick={handleSignOut}
-              className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition text-sm font-semibold backdrop-blur-sm"
-            >
-              <LogOut size={18} />
-              Sign Out
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => router.push('/profile')}
+                className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition text-sm font-semibold backdrop-blur-sm"
+              >
+                👤 Profile
+              </button>
+              <button
+                onClick={handleSignOut}
+                className="flex items-center gap-2 bg-white/20 hover:bg-white/30 px-4 py-2 rounded-lg transition text-sm font-semibold backdrop-blur-sm"
+              >
+                <LogOut size={18} />
+                Sign Out
+              </button>
+            </div>
           </div>
 
           {/* Quick Stats */}
@@ -229,6 +237,25 @@ export default function DashboardPage() {
             </div>
             <div className="text-green-600 font-semibold group-hover:translate-x-2 transition">
               Set Goals →
+            </div>
+          </button>
+
+          {/* Blood Work Tracker */}
+          <button
+            onClick={() => router.push('/blood-work')}
+            className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition group text-left"
+          >
+            <div className="flex items-center gap-4 mb-4">
+              <div className="bg-gradient-to-br from-cyan-500 to-teal-600 p-3 rounded-xl group-hover:scale-110 transition">
+                <Droplet className="text-white" size={32} />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-gray-900">Blood Work Tracker</h3>
+                <p className="text-gray-600 text-sm">Track health markers</p>
+              </div>
+            </div>
+            <div className="text-cyan-600 font-semibold group-hover:translate-x-2 transition">
+              View Blood Work →
             </div>
           </button>
         </div>
