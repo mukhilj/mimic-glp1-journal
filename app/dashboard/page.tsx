@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { Calendar, Target, BookOpen, CalendarDays, CalendarRange, LogOut, Droplet, TrendingDown, TrendingUp, AlertCircle } from 'lucide-react';
+import { Calendar, Target, BookOpen, CalendarDays, CalendarRange, LogOut, Droplet, AlertCircle } from 'lucide-react';
 
 interface BloodWorkSummary {
   totalEntries: number;

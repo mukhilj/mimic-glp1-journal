@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase';
 import { useRouter, useParams } from 'next/navigation';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceArea, ReferenceLine, Dot
+  ResponsiveContainer, ReferenceArea, ReferenceLine
 } from 'recharts';
 import { ChevronLeft, TrendingUp, TrendingDown, Minus, Calendar, Activity } from 'lucide-react';
 
