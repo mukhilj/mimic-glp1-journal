@@ -5,7 +5,7 @@ export interface DailyLog {
   id?: string;
   user_id?: string;
   log_date: string; // YYYY-MM-DD format
-  day_number: number;
+  day_number?: number;
   
   // Meals
   meal_bowls: string[]; // Array of 13 elements: 'P', 'V', 'G', 'C', 'R', or ''
