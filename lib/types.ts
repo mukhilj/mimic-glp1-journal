@@ -50,6 +50,18 @@ export interface DailyLog {
   supplements_taken?: string[]; // Array of supplement names taken
   supplements_check?: boolean;
   
+  // One-year protocol inputs (see lib/protocol.ts)
+  no_sugar?: boolean; // no sugar or jaggery today
+  fast_36h?: boolean; // today was the no-meal day of a 36h fast
+
+  // One-year protocol results, computed on save (partner can read only these)
+  fasting_minutes?: number | null;
+  p_fast16?: boolean;
+  p_diet?: boolean;
+  p_steps?: boolean;
+  p_sleep?: boolean;
+  p_strength?: boolean;
+
   // Notes
   notes?: string;
   
@@ -94,4 +106,4 @@ export const SUPPLEMENT_TYPES = [
   'NAC'
 ];
 
-export const START_DATE = new Date('2026-05-22');
+export const START_DATE = new Date('2026-05-22');

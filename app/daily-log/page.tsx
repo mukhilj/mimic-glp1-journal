@@ -16,6 +16,7 @@ import {
   checkSleepRules,
   calculate7DayAverage,
 } from '@/lib/utils';
+import { PROTOCOL_START, PROTOCOL_TARGETS, addDays, evaluateProtocolDay } from '@/lib/protocol';
 import { ChevronLeft, ChevronRight, LogOut, Save, Share2, Printer, Download, Upload, AlertCircle } from 'lucide-react';
 
 // Program start date: June 1, 2026 (Monday) = Day 1
@@ -234,10 +235,24 @@ export default function HomePage() {
         weight_avg: calculate7DayAverage(allLogs, currentLog.log_date),
       };
 
-      await supabase.from('daily_logs').upsert({
+      // One-year protocol: score the day against yesterday's entry and store only the results
+      const prevLog = allLogs.find(l => l.log_date === addDays(currentLog.log_date, -1)) || null;
+      const scored = evaluateProtocolDay(updatedLog, prevLog);
+      const protocolResult = {
+        fasting_minutes: scored.fasting_minutes,
+        p_fast16: scored.p_fast16,
+        p_diet: scored.p_diet,
+        p_steps: scored.p_steps,
+        p_sleep: scored.p_sleep,
+        p_strength: scored.p_strength,
+      };
+
+      const { error } = await supabase.from('daily_logs').upsert({
         ...updatedLog,
+        ...protocolResult,
         user_id: user.id,
       });
+      if (error) throw error;
 
       showMessage('Saved successfully! ✓', 'success');
       await loadAllLogs(user.id);
@@ -522,6 +537,44 @@ export default function HomePage() {
     allLogs.find(l => l.log_date === formatDateForDB(new Date(currentDate.getTime() - 86400000)))?.meal_times?.lastMealEnd,
     currentLog.meal_times?.meal1
   );
+
+  // One-year protocol: live score for the day being edited
+  const showProtocol = currentLog.log_date >= PROTOCOL_START;
+  const protocolPrevLog = allLogs.find(l => l.log_date === addDays(currentLog.log_date, -1)) || null;
+  const protocolToday = evaluateProtocolDay(currentLog, protocolPrevLog);
+  const protocolRows = [
+    {
+      label: '16h fast',
+      pass: protocolToday.p_fast16,
+      detail: currentLog.fast_36h
+        ? '36h fast day'
+        : protocolPrevLog?.fast_36h
+          ? 'Breaking a 36h fast'
+          : protocolToday.fasting_minutes !== null
+            ? `${Math.floor(protocolToday.fasting_minutes / 60)}h ${protocolToday.fasting_minutes % 60}m`
+            : "Needs yesterday's last meal + today's first meal",
+    },
+    {
+      label: 'Diet',
+      pass: protocolToday.p_diet,
+      detail: `${currentLog.fast_36h ? 'Fast day' : currentLog.meals_check ? 'Bowls OK' : 'Bowls not met'} · ${currentLog.no_sugar ? 'No sugar' : 'Sugar not ticked'}`,
+    },
+    {
+      label: '8k steps',
+      pass: protocolToday.p_steps,
+      detail: `${(currentLog.movement_steps ?? 0).toLocaleString('en-IN')} / ${PROTOCOL_TARGETS.steps.toLocaleString('en-IN')}`,
+    },
+    {
+      label: '7h sleep',
+      pass: protocolToday.p_sleep,
+      detail: `${currentLog.sleep_items.filter(Boolean).length}h / ${PROTOCOL_TARGETS.sleepHours}h`,
+    },
+    {
+      label: 'Strength',
+      pass: protocolToday.p_strength,
+      detail: `Tick S in Movement · target ${PROTOCOL_TARGETS.strengthPerWeek}/week`,
+    },
+  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500">
@@ -1030,6 +1083,59 @@ export default function HomePage() {
             {currentLog.sleep_items.filter(Boolean).length} hours slept
           </p>
         </div>
+
+        {/* ONE-YEAR PROTOCOL */}
+        {showProtocol && (
+          <div className="bg-white rounded-xl shadow-md p-4 md:p-6 mb-6 border-2 border-emerald-200">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-bold text-gray-900">🎯 One-Year Protocol</h2>
+                <p className="text-xs text-gray-500 mt-1">Scored on save. Your partner sees only these ticks.</p>
+              </div>
+              <button
+                onClick={() => router.push('/protocol')}
+                className="text-emerald-700 text-xs md:text-sm font-semibold hover:underline"
+              >
+                Week view →
+              </button>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-3 mb-4">
+              <label className="flex items-center gap-2 cursor-pointer flex-1 px-3 py-2 rounded-lg border-2 border-gray-200">
+                <input
+                  type="checkbox"
+                  checked={!!currentLog.no_sugar}
+                  onChange={(e) => setCurrentLog({ ...currentLog, no_sugar: e.target.checked })}
+                  className="w-5 h-5 rounded border-2 border-gray-300 text-emerald-600"
+                />
+                <span className="text-sm text-gray-800">No sugar / jaggery today</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer flex-1 px-3 py-2 rounded-lg border-2 border-gray-200">
+                <input
+                  type="checkbox"
+                  checked={!!currentLog.fast_36h}
+                  onChange={(e) => setCurrentLog({ ...currentLog, fast_36h: e.target.checked })}
+                  className="w-5 h-5 rounded border-2 border-gray-300 text-emerald-600"
+                />
+                <span className="text-sm text-gray-800">36h fast day (no meals)</span>
+              </label>
+            </div>
+
+            <ul className="divide-y divide-gray-100">
+              {protocolRows.map(row => (
+                <li key={row.label} className="flex items-center justify-between py-2">
+                  <div>
+                    <span className="text-sm font-semibold text-gray-800">{row.label}</span>
+                    <span className="block text-xs text-gray-500">{row.detail}</span>
+                  </div>
+                  <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${row.pass ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'}`}>
+                    {row.pass && <span className="text-white font-bold text-sm">✓</span>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         {/* NOTES */}
         <div className="bg-white rounded-xl shadow-md p-4 md:p-6 mb-6">
