@@ -1,6 +1,6 @@
 // lib/utils.ts
 
-import { DailyLog, START_DATE, BOWL_TYPES } from './types';
+import { DailyLog, START_DATE, BOWL_TYPES, MealLimits, DEFAULT_MEAL_LIMITS } from './types';
 
 export function calculateDayNumber(date: Date): number {
   const startTime = new Date(START_DATE).setHours(0, 0, 0, 0);
@@ -57,18 +57,33 @@ export function calculateFastingWindow(lastMealEnd?: string, firstMeal?: string)
   return `${hours}h ${minutes}m`;
 }
 
-export function checkMealRules(bowls: string[]): boolean {
-  const counts = bowls.reduce((acc, bowl) => {
-    if (bowl) acc[bowl] = (acc[bowl] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
+// Validate meal bowls against a user's configurable limits.
+// meals_check = the returned isValid. `min` is a floor, `max` a ceiling;
+// null max means no ceiling. An empty/absent config uses DEFAULT_MEAL_LIMITS.
+export function validateMeals(
+  bowls: string[],
+  limits: MealLimits = DEFAULT_MEAL_LIMITS
+): { isValid: boolean; warnings: string[] } {
+  const warnings: string[] = [];
+  const filled = bowls.filter(b => b && b !== '');
+  const total = filled.length;
 
-  const P = counts['P'] || 0;
-  const V = counts['V'] || 0;
-  const G = counts['G'] || 0;
-  const R = counts['R'] || 0;
+  if (limits.overallMax !== null && total > limits.overallMax) {
+    warnings.push(`Max ${limits.overallMax} bowls total (currently ${total})`);
+  }
 
-  return P >= 3 && (V + G) >= 3 && R <= 2;
+  for (const [code, lim] of Object.entries(limits.types)) {
+    const count = filled.filter(b => b === code).length;
+    const label = BOWL_TYPES[code]?.label ?? code;
+    if (count < lim.min) {
+      warnings.push(`${label}: need at least ${lim.min} (currently ${count})`);
+    }
+    if (lim.max !== null && count > lim.max) {
+      warnings.push(`${label}: max ${lim.max} (currently ${count})`);
+    }
+  }
+
+  return { isValid: warnings.length === 0, warnings };
 }
 
 export function checkMovementRules(items: boolean[]): boolean {

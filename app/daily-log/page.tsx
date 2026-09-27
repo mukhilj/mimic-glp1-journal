@@ -3,14 +3,14 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { DailyLog, BOWL_TYPES, MOVEMENT_TYPES, SUPPLEMENT_TYPES } from '@/lib/types';
+import { DailyLog, BOWL_TYPES, MOVEMENT_TYPES, SUPPLEMENT_TYPES, MealLimits, DEFAULT_MEAL_LIMITS } from '@/lib/types';
 import {
   calculateDayNumber,
   formatDate,
   formatDateForDB,
   createEmptyLog,
   calculateFastingWindow,
-  checkMealRules,
+  validateMeals,
   checkMovementRules,
   checkHydrationRules,
   checkSleepRules,
@@ -39,48 +39,6 @@ function getDayNumber(date: Date): number {
 }
 
 // ============ PHASE 1: NEW VALIDATION FUNCTIONS ============
-
-/**
- * Validate meal bowls based on gender-specific limits and bowl type restrictions
- * Men: <10 bowls max
- * Women: <8 bowls max
- * Carbs (C): <1 (max 0 carbs)
- * Rice (R): <2 (max 1 rice)
- * Returns: { isValid: boolean, warnings: string[] }
- */
-function validateMealBowls(
-  bowls: string[],
-  userGender: 'male' | 'female' = 'male' // Default to male (10 max)
-): { isValid: boolean; warnings: string[] } {
-  const warnings: string[] = [];
-  const filledBowls = bowls.filter(b => b && b !== '');
-  
-  // Count by type
-  const carbCount = filledBowls.filter(b => b === 'C').length;
-  const riceCount = filledBowls.filter(b => b === 'R').length;
-  const totalCount = filledBowls.length;
-  
-  // Check gender-specific bowl limits
-  const maxBowls = userGender === 'male' ? 10 : 8;
-  if (totalCount >= maxBowls) {
-    warnings.push(`⚠️ ${userGender === 'male' ? 'Men' : 'Women'}: Max ${maxBowls} bowls (currently: ${totalCount})`);
-  }
-  
-  // Check carb limit (C > 0)
-  if (carbCount > 1) {
-    warnings.push(`⚠️ Carbs: Max 1 (currently: ${carbCount})`);
-  }
-  
-  // Check rice limit (R > 1)
-  if (riceCount > 1) {
-    warnings.push(`⚠️ Rice: Max 1 bowl (currently: ${riceCount})`);
-  }
-  
-  // Valid only if NO violations
-  const isValid = warnings.length === 0;
-  
-  return { isValid, warnings };
-}
 
 /**
  * Calculate supplement check status
@@ -126,6 +84,8 @@ export default function HomePage() {
     shouldTick: false,
     percentage: 0
   });
+  // Per-user meal limits, loaded from user_preferences.meal_limits (falls back to default)
+  const [mealLimits, setMealLimits] = useState<MealLimits>(DEFAULT_MEAL_LIMITS);
 
   const router = useRouter();
   const supabase = createClient();
@@ -142,21 +102,18 @@ export default function HomePage() {
 
   // PHASE 1: Enhanced useEffect - Now includes meal and supplement validation
   useEffect(() => {
-    // Get user gender (default to male for 10-bowl limit)
-    const userGender = (user?.user_metadata?.gender as 'male' | 'female') || 'male';
-    
-    // Validate meals
-    const mealValidationResult = validateMealBowls(currentLog.meal_bowls, userGender);
+    // Validate meals against the user's configurable limits
+    const mealValidationResult = validateMeals(currentLog.meal_bowls, mealLimits);
     setMealValidation(mealValidationResult);
-    
+
     // Validate supplements
     const supplementValidationResult = validateSupplements(currentLog.supplements_taken || []);
     setSupplementValidation(supplementValidationResult);
-    
-    // Update checks - only meals_check ticks if meal validation passes AND other rules met
+
+    // Update checks - meals_check ticks only if the bowls satisfy the user's limits
     setCurrentLog(prev => ({
       ...prev,
-      meals_check: mealValidationResult.isValid && checkMealRules(prev.meal_bowls),
+      meals_check: mealValidationResult.isValid,
       supplements_check: supplementValidationResult.shouldTick, // NEW: supplements_check now based on 75% rule
       movement_check: checkMovementRules(prev.movement_items),
       hydration_check: checkHydrationRules(prev.hydration_items),
@@ -168,6 +125,7 @@ export default function HomePage() {
     currentLog.movement_items,
     currentLog.hydration_items,
     currentLog.sleep_items,
+    mealLimits,
     user,
   ]);
 
@@ -178,9 +136,24 @@ export default function HomePage() {
       router.push('/login');
     } else {
       setUser(user);
+      await loadMealLimits(user.id);
       await loadAllLogs(user.id);
     }
     setLoading(false);
+  }
+
+  async function loadMealLimits(userId: string) {
+    const { data, error } = await supabase
+      .from('user_preferences')
+      .select('meal_limits')
+      .eq('user_id', userId)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('Error loading meal limits:', error);
+      return;
+    }
+    if (data?.meal_limits) setMealLimits(data.meal_limits as MealLimits);
   }
 
   async function loadAllLogs(userId: string) {
@@ -219,14 +192,13 @@ export default function HomePage() {
     setSaving(true);
 
     try {
-      const userGender = (user?.user_metadata?.gender as 'male' | 'female') || 'male';
-      const mealValidationResult = validateMealBowls(currentLog.meal_bowls, userGender);
+      const mealValidationResult = validateMeals(currentLog.meal_bowls, mealLimits);
       const supplementValidationResult = validateSupplements(currentLog.supplements_taken || []);
-      
+
       const updatedLog = {
         ...currentLog,
-        // PHASE 1: Only tick meals_check if validation passes AND other rules met
-        meals_check: mealValidationResult.isValid && checkMealRules(currentLog.meal_bowls),
+        // meals_check ticks only if the bowls satisfy the user's configured limits
+        meals_check: mealValidationResult.isValid,
         // PHASE 1: New supplement check based on 75% rule
         supplements_check: supplementValidationResult.shouldTick,
         movement_check: checkMovementRules(currentLog.movement_items),

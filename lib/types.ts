@@ -82,6 +82,32 @@ export interface BowlType {
   color: string;
 }
 
+// Per-user meal limits, stored on user_preferences.meal_limits (jsonb).
+// A missing config falls back to DEFAULT_MEAL_LIMITS.
+export interface TypeLimit {
+  min: number; // minimum bowls of this type (0 = no minimum)
+  max: number | null; // maximum bowls of this type (null = no maximum)
+}
+
+export interface MealLimits {
+  overallMax: number | null; // max total filled bowls (null = no cap)
+  types: Record<string, TypeLimit>; // keyed by bowl type code (P, V, G, C, R)
+}
+
+// Seeds the historical MGLP-1 rules as closely as per-type min/max allows.
+// Note: the old combined "V+G >= 3" rule cannot be expressed per-type, so
+// greens carry no minimum here; users set their own in Profile.
+export const DEFAULT_MEAL_LIMITS: MealLimits = {
+  overallMax: 10,
+  types: {
+    P: { min: 3, max: null },
+    V: { min: 0, max: null },
+    G: { min: 0, max: null },
+    C: { min: 0, max: 1 },
+    R: { min: 0, max: 1 },
+  },
+};
+
 export const BOWL_TYPES: Record<string, BowlType> = {
   P: { label: 'Protein', color: '#f97316' },
   V: { label: 'Veg', color: '#a3e635' },

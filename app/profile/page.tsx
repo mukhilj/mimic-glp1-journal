@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { Save, ChevronLeft, AlertCircle, Loader } from 'lucide-react';
+import { BOWL_TYPES, MealLimits, DEFAULT_MEAL_LIMITS } from '@/lib/types';
 
 export default function ProfilePage() {
   const [user, setUser] = useState<any>(null);
@@ -21,9 +22,25 @@ export default function ProfilePage() {
   const [weightDate, setWeightDate] = useState('');
   const [weightUnit, setWeightUnit] = useState('kg');
   const [preferredUnitSystem, setPreferredUnitSystem] = useState('Metric');
-  
+  // Per-user meal limits (overall cap + per-type min/max)
+  const [mealLimits, setMealLimits] = useState<MealLimits>(DEFAULT_MEAL_LIMITS);
+
   // Calculated values
   const [calculatedAge, setCalculatedAge] = useState<number | null>(null);
+
+  // Update one field of one bowl type's limit. Empty string on max = no ceiling (null).
+  function setTypeLimit(code: string, field: 'min' | 'max', raw: string) {
+    setMealLimits(prev => {
+      const parsed = raw === '' ? (field === 'max' ? null : 0) : Math.max(0, parseInt(raw, 10) || 0);
+      return {
+        ...prev,
+        types: {
+          ...prev.types,
+          [code]: { ...prev.types[code], [field]: parsed },
+        },
+      };
+    });
+  }
 
   const router = useRouter();
   const supabase = createClient();
@@ -93,6 +110,7 @@ export default function ProfilePage() {
         if (data.weight_date) setWeightDate(data.weight_date);
         if (data.weight_unit) setWeightUnit(data.weight_unit);
         if (data.preferred_unit_system) setPreferredUnitSystem(data.preferred_unit_system);
+        if (data.meal_limits) setMealLimits(data.meal_limits as MealLimits);
         showMessage('Profile data loaded! ✓', 'success');
       } else {
         console.log('No profile data found - first time user');
@@ -126,6 +144,7 @@ export default function ProfilePage() {
         weight_date: weightDate || null,
         weight_unit: weightUnit,
         preferred_unit_system: preferredUnitSystem,
+        meal_limits: mealLimits,
         updated_at: new Date().toISOString(),
       };
 
@@ -334,6 +353,72 @@ export default function ProfilePage() {
               <p className="text-xs text-gray-600">
                 💡 When you add weight, please specify the date it was measured. This helps track your weight journey accurately.
               </p>
+            </div>
+          </div>
+
+          {/* SECTION: MEAL LIMITS */}
+          <div className="mb-8">
+            <h2 className="text-xl font-bold text-gray-900 mb-2 pb-3 border-b-2 border-green-500">
+              🍲 Meal Limits
+            </h2>
+            <p className="text-sm text-gray-600 mb-6">
+              Set your own daily bowl targets. These decide when the meals check passes.
+              Leave a max blank for no upper limit. A min of 0 means no minimum.
+            </p>
+
+            {/* Overall cap */}
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                Overall max bowls per day
+              </label>
+              <input
+                type="number"
+                min="0"
+                value={mealLimits.overallMax ?? ''}
+                placeholder="No limit"
+                onChange={(e) =>
+                  setMealLimits(prev => ({
+                    ...prev,
+                    overallMax: e.target.value === '' ? null : Math.max(0, parseInt(e.target.value, 10) || 0),
+                  }))
+                }
+                className="w-40 px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-green-500 focus:outline-none"
+              />
+            </div>
+
+            {/* Per-type min/max */}
+            <div className="space-y-3">
+              <div className="grid grid-cols-[1fr_5rem_5rem] gap-3 items-center text-xs font-semibold text-gray-500 uppercase">
+                <span>Type</span>
+                <span>Min</span>
+                <span>Max</span>
+              </div>
+              {Object.keys(mealLimits.types).map((code) => (
+                <div key={code} className="grid grid-cols-[1fr_5rem_5rem] gap-3 items-center">
+                  <span className="flex items-center gap-2 font-medium text-gray-700">
+                    <span
+                      className="inline-block w-3 h-3 rounded-full"
+                      style={{ backgroundColor: BOWL_TYPES[code]?.color }}
+                    />
+                    {BOWL_TYPES[code]?.label ?? code}
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={mealLimits.types[code].min}
+                    onChange={(e) => setTypeLimit(code, 'min', e.target.value)}
+                    className="px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-green-500 focus:outline-none"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    value={mealLimits.types[code].max ?? ''}
+                    placeholder="—"
+                    onChange={(e) => setTypeLimit(code, 'max', e.target.value)}
+                    className="px-3 py-2 border-2 border-gray-200 rounded-lg focus:border-green-500 focus:outline-none"
+                  />
+                </div>
+              ))}
             </div>
           </div>
 
