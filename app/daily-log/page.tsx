@@ -11,6 +11,7 @@ import {
   createEmptyLog,
   calculateFastingWindow,
   validateMeals,
+  describeMealLimits,
   checkMovementRules,
   checkHydrationRules,
   checkSleepRules,
@@ -717,7 +718,7 @@ export default function HomePage() {
             <div>
               <h2 className="text-lg font-bold text-gray-900">🍽️ Meal Bowls</h2>
               <p className="text-xs text-gray-500 mt-1">
-                Target: Men &lt;10, Women &lt;8 | Carbs &lt;1, Rice &lt;2 | P+V+G ≥4, R≤2
+                {describeMealLimits(mealLimits)}
               </p>
             </div>
             <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${currentLog.meals_check ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>

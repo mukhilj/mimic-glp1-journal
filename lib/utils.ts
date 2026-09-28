@@ -86,6 +86,22 @@ export function validateMeals(
   return { isValid: warnings.length === 0, warnings };
 }
 
+// Human-readable one-line summary of a user's meal limits, for the daily-log
+// Meal Bowls card. Shows only the constraints that are actually set.
+export function describeMealLimits(limits: MealLimits = DEFAULT_MEAL_LIMITS): string {
+  const parts: string[] = [];
+  if (limits.overallMax !== null) parts.push(`Max ${limits.overallMax} bowls`);
+
+  for (const [code, lim] of Object.entries(limits.types)) {
+    const label = BOWL_TYPES[code]?.label ?? code;
+    if (lim.min > 0 && lim.max !== null) parts.push(`${label} ${lim.min}-${lim.max}`);
+    else if (lim.min > 0) parts.push(`${label} ≥${lim.min}`);
+    else if (lim.max !== null) parts.push(`${label} ≤${lim.max}`);
+  }
+
+  return parts.length ? `Target: ${parts.join(' | ')}` : 'No meal limits set (edit in Profile)';
+}
+
 export function checkMovementRules(items: boolean[]): boolean {
   // Only count Cardio (index 0) or Strength (index 1), not Rest (index 2)
   return items[0] === true || items[1] === true;
