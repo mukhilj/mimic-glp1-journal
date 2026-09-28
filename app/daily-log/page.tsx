@@ -38,6 +38,16 @@ function getDayNumber(date: Date): number {
   return diffDays + 1; // Day 1 starts on June 1, 2026
 }
 
+// Tap-to-fill for sleep/hydration circles. Tapping circle N (0-based `tapped`)
+// fills circles 1..N and clears the rest. Tapping the current top circle again
+// steps down by one (so the count can reach 0). Result stays a boolean prefix of
+// the same length, so old rows and every filter(Boolean).length reader still work.
+function fillCircles(items: boolean[], tapped: number): boolean[] {
+  const current = items.filter(Boolean).length;
+  const target = current === tapped + 1 ? tapped : tapped + 1;
+  return items.map((_, idx) => idx < target);
+}
+
 // ============ PHASE 1: NEW VALIDATION FUNCTIONS ============
 
 /**
@@ -1002,9 +1012,7 @@ export default function HomePage() {
               <button
                 key={i}
                 onClick={() => {
-                  const items = [...currentLog.hydration_items];
-                  items[i] = !items[i];
-                  setCurrentLog({ ...currentLog, hydration_items: items });
+                  setCurrentLog({ ...currentLog, hydration_items: fillCircles(currentLog.hydration_items, i) });
                 }}
                 className={`w-10 h-10 rounded-full border-2 font-bold text-sm transition flex items-center justify-center ${
                   filled
@@ -1012,7 +1020,7 @@ export default function HomePage() {
                     : 'border-gray-300 text-gray-400 bg-white'
                 }`}
               >
-                L
+                {i === currentLog.hydration_items.length - 1 ? `${currentLog.hydration_items.length}+` : i + 1}
               </button>
             ))}
           </div>
@@ -1037,9 +1045,7 @@ export default function HomePage() {
               <button
                 key={i}
                 onClick={() => {
-                  const items = [...currentLog.sleep_items];
-                  items[i] = !items[i];
-                  setCurrentLog({ ...currentLog, sleep_items: items });
+                  setCurrentLog({ ...currentLog, sleep_items: fillCircles(currentLog.sleep_items, i) });
                 }}
                 className={`w-10 h-10 rounded-full border-2 font-bold text-sm transition flex items-center justify-center ${
                   filled
@@ -1047,7 +1053,7 @@ export default function HomePage() {
                     : 'border-gray-300 text-gray-400 bg-white'
                 }`}
               >
-                H
+                {i === currentLog.sleep_items.length - 1 ? `${currentLog.sleep_items.length}+` : i + 1}
               </button>
             ))}
           </div>
