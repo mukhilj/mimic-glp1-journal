@@ -141,8 +141,8 @@ export default function DashboardPage() {
         {/* ── NAVIGATION CARDS ── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 md:gap-6 mb-6">
           {[
-            { label: 'One-Year Protocol', sub: 'Your week and your partner\'s, side by side', color: 'from-emerald-500 to-teal-600', textColor: 'text-emerald-600', icon: <Flame size={28} className="text-white" />, cta: 'View Protocol →', route: '/protocol' },
             { label: 'Daily Log', sub: 'Track your daily progress', color: 'from-blue-500 to-indigo-600', textColor: 'text-indigo-600', icon: <Calendar size={28} className="text-white" />, cta: 'Log Today →', route: '/daily-log' },
+            { label: 'One-Year Protocol', sub: 'Your week and your partner\'s, side by side', color: 'from-emerald-500 to-teal-600', textColor: 'text-emerald-600', icon: <Flame size={28} className="text-white" />, cta: 'View Protocol →', route: '/protocol' },
             { label: 'Weekly Reflection', sub: 'Review your week', color: 'from-purple-500 to-indigo-600', textColor: 'text-purple-600', icon: <CalendarDays size={28} className="text-white" />, cta: 'Start Reflection →', route: '/weekly-reflection' },
             { label: 'Monthly Reflection', sub: 'Deep monthly review', color: 'from-pink-500 to-purple-600', textColor: 'text-pink-600', icon: <CalendarRange size={28} className="text-white" />, cta: 'Start Reflection →', route: '/monthly-reflection' },
             { label: 'Goals & Targets', sub: 'Set your weight goals', color: 'from-green-500 to-emerald-600', textColor: 'text-green-600', icon: <Target size={28} className="text-white" />, cta: 'Set Goals →', route: '/goals' },
